@@ -1,0 +1,27 @@
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Data cache (offline downloaded data)
+data_cache/
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+
+# VS Code specific (keep settings.json if needed)
+.vscode/*
+!.vscode/settings.json
+
+# Matplotlib cache
+.matplotlib/
