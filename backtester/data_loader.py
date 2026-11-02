@@ -101,3 +101,34 @@ class DataLoader:
 
         print(f"[DataLoader] Downloaded {len(df)} trading days for {ticker}.")
         return df
+
+    def load_multi_data(
+        self,
+        tickers: list,
+        start_date: str = None,
+        end_date: str = None,
+        lookback_years: int = 3,
+        price_col: str = "Close",
+    ) -> pd.DataFrame:
+        """
+        Loads multiple tickers and returns a unified DataFrame of Close prices.
+        """
+        price_dict = {}
+        for t in tickers:
+            t = t.strip().upper()
+            if t in ["SPACEX", "SPACE-X", "SPACE_X"]:
+                t = "SPCX"
+            try:
+                df = self.load_data(t, start_date=start_date, end_date=end_date, lookback_years=lookback_years)
+                price_dict[t] = df[price_col]
+            except Exception as e:
+                print(f"[DataLoader] Warning: Could not load data for {t}: {e}")
+
+        if not price_dict:
+            raise ValueError(f"Failed to load data for any tickers in {tickers}")
+
+        combined_df = pd.DataFrame(price_dict)
+        # Drop rows where ALL tickers are NaN
+        combined_df.dropna(how="all", inplace=True)
+        combined_df.ffill(inplace=True)
+        return combined_df

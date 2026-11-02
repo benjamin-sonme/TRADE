@@ -87,6 +87,18 @@ class Visualizer:
         if "MA_Short" in data.columns and "MA_Long" in data.columns:
             ax_price.plot(data.index, data["MA_Short"], color="#F59E0B", linewidth=1.0, alpha=0.9, label="MA Short")
             ax_price.plot(data.index, data["MA_Long"], color="#8B5CF6", linewidth=1.0, alpha=0.9, label="MA Long")
+        elif "Upper_Channel" in data.columns and "Lower_Channel" in data.columns:
+            ax_price.plot(data.index, data["Upper_Channel"], color="#10B981", linewidth=1.0, linestyle="--", label="Upper Donchian")
+            ax_price.plot(data.index, data["Lower_Channel"], color="#EF4444", linewidth=1.0, linestyle="--", label="Lower Donchian")
+        elif "BB_Upper" in data.columns and "BB_Lower" in data.columns:
+            ax_price.plot(data.index, data["BB_Upper"], color="#38BDF8", linewidth=1.0, linestyle="--", label="BB Upper")
+            ax_price.plot(data.index, data["BB_Middle"], color="#F59E0B", linewidth=1.0, label="BB 20 SMA")
+            ax_price.plot(data.index, data["BB_Lower"], color="#38BDF8", linewidth=1.0, linestyle="--", label="BB Lower")
+            ax_price.fill_between(data.index, data["BB_Lower"], data["BB_Upper"], color="#38BDF8", alpha=0.08)
+        elif "SMA_Fast" in data.columns and "SMA_Mid" in data.columns and "SMA_Slow" in data.columns:
+            ax_price.plot(data.index, data["SMA_Fast"], color="#38BDF8", linewidth=1.0, label="SMA 20")
+            ax_price.plot(data.index, data["SMA_Mid"], color="#F59E0B", linewidth=1.0, label="SMA 50")
+            ax_price.plot(data.index, data["SMA_Slow"], color="#A855F7", linewidth=1.0, label="SMA 200")
         elif "Trend_MA" in data.columns:
             ax_price.plot(data.index, data["Trend_MA"], color="#8B5CF6", linewidth=1.0, alpha=0.9, label="Trend MA")
 

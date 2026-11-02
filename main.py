@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """
 U.S. Equity Trading Strategy Backtesting System
-美股交易策略回测系统 (v1.0)
+美股交易策略回测系统 (v2.0)
 
-Main Entrypoint:
-Provides interactive prompts or CLI argument parsing, runs backtests,
-prints a comparison summary against Buy & Hold, and generates performance charts.
+Supports 9 Classic Trading & Portfolio Strategies:
+S01. Dual MA Crossover (双均线交叉)
+S02. RSI Mean Reversion (RSI 均值回归)
+S03. Donchian Channel Breakout (唐奇安通道突破)
+S04. Relative Momentum Rotation (相对动量轮动)
+S05. Bollinger Band Squeeze (布林带挤压突破)
+S06. Trend Pullback (趋势回撤买入)
+S07. Threshold Rebalancing (阈值再平衡)
+S08. Quality & Value Factor (质量与价值因子)
+S09. Dual Momentum (双重动量轮动)
 """
 
 import sys
@@ -14,17 +21,16 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import argparse
+from typing import Dict, Any, List
 
 try:
     from tabulate import tabulate
 except ImportError:
-    # Graceful fallback if tabulate is not installed in the active environment
     def tabulate(table_data, headers=None, tablefmt=None):
         col_widths = [len(str(h)) for h in (headers or table_data[0])]
         for row in table_data:
             for i, cell in enumerate(row):
                 col_widths[i] = max(col_widths[i], len(str(cell)))
-        
         lines = []
         if headers:
             lines.append("  ".join(str(h).ljust(col_widths[i]) for i, h in enumerate(headers)))
@@ -34,14 +40,27 @@ except ImportError:
         return "\n".join(lines)
 
 from backtester.data_loader import DataLoader
-from backtester.strategies.ma_crossover import DualMACrossoverStrategy
-from backtester.strategies.rsi_strategy import RSIStrategy
 from backtester.engine import BacktestEngine
 from backtester.visualizer import Visualizer
+from backtester.portfolio_engine import PortfolioEngine, PortfolioBacktestResult
+from backtester.portfolio_visualizer import PortfolioVisualizer
+
+# Single stock strategies
+from backtester.strategies.ma_crossover import DualMACrossoverStrategy
+from backtester.strategies.rsi_strategy import RSIStrategy
+from backtester.strategies.donchian_breakout import DonchianBreakoutStrategy
+from backtester.strategies.bollinger_squeeze import BollingerBandSqueezeStrategy
+from backtester.strategies.trend_pullback import TrendPullbackStrategy
+
+# Portfolio / Multi-asset strategies
+from backtester.strategies.relative_momentum import RelativeMomentumRotation
+from backtester.strategies.threshold_rebalancing import ThresholdRebalancing
+from backtester.strategies.quality_value_factor import QualityValueFactorStrategy, DEFAULT_FACTOR_UNIVERSE
+from backtester.strategies.dual_momentum import DualMomentumStrategy
 
 
 def format_pct(val: float) -> str:
-    if val is None or val != val:  # Check nan
+    if val is None or val != val:
         return "N/A"
     return f"{val * 100:+.2f}%"
 
@@ -52,9 +71,12 @@ def format_float(val: float, precision: int = 2) -> str:
     return f"{val:.{precision}f}"
 
 
-def print_comparison_table(result):
+def print_comparison_table(result, is_portfolio: bool = False):
     """Prints a beautiful comparison table between Strategy and Benchmark."""
     m = result.metrics
+
+    strat_header = f"Strategy ({result.strategy_name})"
+    bench_header = f"Benchmark ({getattr(result, 'benchmark_name', 'Buy & Hold')})"
 
     table_data = [
         ["Initial Capital", f"${result.initial_capital:,.2f}", f"${result.initial_capital:,.2f}"],
@@ -64,83 +86,90 @@ def print_comparison_table(result):
         ["Annualized Volatility", format_pct(m["Strategy Volatility"]), format_pct(m["Benchmark Volatility"])],
         ["Sharpe Ratio (Rf=4%)", format_float(m["Strategy Sharpe"]), format_float(m["Benchmark Sharpe"])],
         ["Max Drawdown (MDD)", format_pct(m["Strategy Max Drawdown"]), format_pct(m["Benchmark Max Drawdown"])],
-        ["Max DD Duration (Days)", f"{m['Max DD Duration (Days)']} days", "—"],
-        ["Total Closed Trades", f"{m['Total Trades']}", "1 (Buy & Hold)"],
-        ["Win Rate", format_pct(m["Win Rate"]), "—"],
-        ["Profit Factor", format_float(m["Profit Factor"]) if m["Profit Factor"] != float("inf") else "∞", "—"],
+        ["Max DD Duration (Days)", f"{m.get('Max DD Duration (Days)', '—')} days", "—"],
     ]
 
-    headers = ["Metric / 指标", f"Strategy ({result.strategy_name})", "Benchmark (Buy & Hold)"]
+    if not is_portfolio:
+        table_data.extend([
+            ["Total Closed Trades", f"{m.get('Total Trades', 0)}", "1 (Buy & Hold)"],
+            ["Win Rate", format_pct(m.get("Win Rate", 0)), "—"],
+            ["Profit Factor", format_float(m.get("Profit Factor", 0)) if m.get("Profit Factor", 0) != float("inf") else "∞", "—"],
+        ])
+    else:
+        events = getattr(result, "rebalance_events", [])
+        table_data.append(["Rebalance Events", f"{len(events)} times", "—"])
 
-    print("\n" + "=" * 70)
-    print(f"📊 BACKTEST RESULTS: {result.ticker} ({result.start_date} to {result.end_date})")
-    print("=" * 70)
+    headers = ["Metric / 指标", strat_header, bench_header]
+
+    title = getattr(result, "ticker", result.strategy_name)
+    print("\n" + "=" * 75)
+    print(f"📊 BACKTEST RESULTS: {title} ({result.start_date} to {result.end_date})")
+    print("=" * 75)
     print(tabulate(table_data, headers=headers, tablefmt="fancy_grid"))
-    print("=" * 70)
+    print("=" * 75)
 
-    # Educational beginner takeaways
+    # Strategy takeaways
     print("\n💡 策略诊断解读 (Strategy Takeaways for Beginners):")
     strat_ret = m["Strategy Total Return"]
     bench_ret = m["Benchmark Total Return"]
     strat_mdd = abs(m["Strategy Max Drawdown"])
     bench_mdd = abs(m["Benchmark Max Drawdown"])
     strat_sharpe = m["Strategy Sharpe"]
-    bench_sharpe = m["Benchmark Sharpe"]
 
     if strat_ret > bench_ret and strat_mdd < bench_mdd:
         print("  🌟 [双赢组合]：该策略既跑赢了标的本身的买入持有收益，又控制了更小的最大回撤！")
     elif strat_mdd < bench_mdd:
-        print(f"  🛡️ [风控防守]：策略最大回撤 ({strat_mdd*100:.1f}%) 显著优于买入持有 ({bench_mdd*100:.1f}%)，牺牲少许涨幅换来了更安稳的持仓体验，避免了深套。")
+        print(f"  🛡️ [风控防守]：策略最大回撤 ({strat_mdd*100:.1f}%) 显著优于基准 ({bench_mdd*100:.1f}%)，有效避免了深套和踩雷。")
     elif strat_ret > bench_ret:
-        print(f"  🚀 [超额收益]：策略抓住了大波段趋势，获取了更高的总回报 ({strat_ret*100:.1f}% vs {bench_ret*100:.1f}%)。")
+        print(f"  🚀 [超额收益]：策略捕捉到了更佳的收益波段，获得了更高的总回报 ({strat_ret*100:.1f}% vs {bench_ret*100:.1f}%)。")
     else:
-        print("  ⚠️ [提示]：在强单边大牛市中，趋势跟踪策略可能会因震荡或中途下车而落后于买入持有，但能规避单边大熊市的暴跌。")
+        print("  ⚠️ [提示]：在强单边大牛市中，规则策略可能因等待确认信号或防守空仓而落后于买入持有，但熊市防御价值显著。")
 
     if strat_sharpe > 1.0:
-        print(f"  ✅ 夏普比率 ({strat_sharpe:.2f}) 处于良好区间 (>1.0)，说明每承担一份波动风险获得了较好的超额回报。")
+        print(f"  ✅ 夏普比率 ({strat_sharpe:.2f}) 处于优异区间 (>1.0)，风险调整后超额收益出色。")
 
 
-def run_backtest_pipeline(
+def run_single_stock_pipeline(
     ticker: str,
-    strategy_type: str = "ma",
-    start_date: str = None,
-    end_date: str = None,
+    strategy_code: str,
     lookback_years: int = 3,
     initial_capital: float = 10000.0,
     **kwargs,
 ):
-    """Executes the complete backtesting pipeline."""
+    """Executes single stock strategy backtest (S01, S02, S03, S05, S06)."""
     ticker = ticker.strip().upper()
-
-    # Intelligent alias for SpaceX
     if ticker in ["SPACEX", "SPACE-X", "SPACE_X"]:
         print("\n🚀 提示：SpaceX 已在纳斯达克挂牌上市，股票代码为 SPCX。已自动为您切换为代码 SPCX 进行回测分析！\n")
         ticker = "SPCX"
 
     loader = DataLoader()
     try:
-        data = loader.load_data(ticker, start_date=start_date, end_date=end_date, lookback_years=lookback_years)
+        data = loader.load_data(ticker, lookback_years=lookback_years)
     except Exception as e:
         print(f"\n❌ 获取数据失败: {e}")
         return None
 
-    # Instantiate strategy
-    if strategy_type.lower() in ["ma", "dma", "moving_average"]:
-        short_w = kwargs.get("short_window", 20)
-        long_w = kwargs.get("long_window", 50)
-        ma_type = kwargs.get("ma_type", "SMA")
-        strategy = DualMACrossoverStrategy(short_window=short_w, long_window=long_w, ma_type=ma_type)
-    elif strategy_type.lower() in ["rsi", "mean_reversion"]:
-        period = kwargs.get("rsi_period", 14)
-        oversold = kwargs.get("oversold", 30.0)
-        overbought = kwargs.get("overbought", 70.0)
-        use_trend = kwargs.get("use_trend_filter", True)
-        strategy = RSIStrategy(period=period, oversold=oversold, overbought=overbought, use_trend_filter=use_trend)
+    code = strategy_code.upper()
+    if code in ["S01", "MA"]:
+        strategy = DualMACrossoverStrategy(
+            short_window=kwargs.get("short_ma", 20),
+            long_window=kwargs.get("long_ma", 50),
+        )
+    elif code in ["S02", "RSI"]:
+        strategy = RSIStrategy(period=14, oversold=30.0, overbought=70.0, use_trend_filter=True)
+    elif code in ["S03", "DONCHIAN"]:
+        strategy = DonchianBreakoutStrategy(
+            entry_window=kwargs.get("entry_window", 20),
+            exit_window=kwargs.get("exit_window", 10),
+        )
+    elif code in ["S05", "BOLLINGER", "BB"]:
+        strategy = BollingerBandSqueezeStrategy(period=20, std_dev=2.0, squeeze_percentile=10.0)
+    elif code in ["S06", "PULLBACK"]:
+        strategy = TrendPullbackStrategy(sma_fast=20, sma_mid=50, sma_slow=200)
     else:
-        print(f"❌ 未知策略类型: {strategy_type}")
+        print(f"❌ 未知单股策略代码: {strategy_code}")
         return None
 
-    # Run backtest
     engine = BacktestEngine(
         initial_capital=initial_capital,
         commission_per_trade=kwargs.get("commission", 0.0),
@@ -148,40 +177,141 @@ def run_backtest_pipeline(
     )
     result = engine.run(data, strategy, ticker=ticker)
 
-    # Print summary
-    print_comparison_table(result)
-
-    # Plot chart
+    print_comparison_table(result, is_portfolio=False)
     chart_path = Visualizer.plot_result(result)
     print(f"\n📈 图表生成完毕！您可以在此处查看完整可视化收益曲线：\n👉 {chart_path}\n")
+    return result
 
+
+def run_portfolio_pipeline(
+    strategy_code: str,
+    lookback_years: int = 3,
+    initial_capital: float = 100000.0,
+    **kwargs,
+):
+    """Executes multi-asset / portfolio strategy backtest (S04, S07, S08, S09)."""
+    loader = DataLoader()
+    p_engine = PortfolioEngine(initial_capital=initial_capital)
+    code = strategy_code.upper()
+
+    if code in ["S09", "DUAL_MOMENTUM"]:
+        # S09: Dual Momentum (SPY, VEU, BIL)
+        print("\n🚀 [S09] 加载宏观核心资产: SPY (美股), VEU (全球除美), BIL (1-3月短期国债/现金)...")
+        prices_df = loader.load_multi_data(["SPY", "VEU", "BIL"], lookback_years=lookback_years)
+        dm = DualMomentumStrategy()
+        weights_df = dm.compute_target_weights(prices_df)
+        result = p_engine.run(
+            prices_df=prices_df,
+            target_weights_df=weights_df,
+            strategy_name="S09_DualMomentum",
+            benchmark_series=prices_df["SPY"],
+            benchmark_name="SPY (US Equities)",
+        )
+
+    elif code in ["S04", "RELATIVE_MOMENTUM"]:
+        # S04: Relative Momentum Rotation
+        universe = kwargs.get("universe", ["NVDA", "TSLA", "SPCX", "AAPL", "MSFT", "AMZN", "GOOGL", "META"])
+        print(f"\n🚀 [S04] 加载候选股票池 ({len(universe)}只标的): {', '.join(universe)}...")
+        prices_df = loader.load_multi_data(universe, lookback_years=lookback_years)
+        rm = RelativeMomentumRotation(top_n=4, target_weight_per_stock=0.20)
+        weights_df = rm.compute_target_weights(prices_df)
+        
+        # Benchmark: Equal-weight buy & hold of the universe
+        norm_prices = prices_df.divide(prices_df.iloc[0])
+        benchmark_series = norm_prices.mean(axis=1) * prices_df.iloc[0].mean()
+        result = p_engine.run(
+            prices_df=prices_df,
+            target_weights_df=weights_df,
+            strategy_name="S04_RelativeMomentumRotation",
+            benchmark_series=benchmark_series,
+            benchmark_name="Equal-Weight Buy & Hold",
+        )
+
+    elif code in ["S07", "REBALANCE"]:
+        # S07: Threshold Rebalancing
+        universe = kwargs.get("universe", ["NVDA", "TSLA", "SPCX", "AAPL"])
+        print(f"\n🚀 [S07] 加载组合持仓 ({len(universe)}只核心标的): {', '.join(universe)}...")
+        prices_df = loader.load_multi_data(universe, lookback_years=lookback_years)
+        
+        # Target weight: equal across stocks (e.g. 20% each), remainder in cash
+        tw_per_stock = 0.80 / len(universe)
+        target_weights = {asset: tw_per_stock for asset in universe}
+        tr = ThresholdRebalancing(target_weights=target_weights, target_cash_pct=0.20, band_pct=0.25)
+        
+        result = tr.simulate(
+            prices_df=prices_df,
+            initial_capital=initial_capital,
+            benchmark_name="Buy & Hold (No Rebalance)",
+        )
+
+    elif code in ["S08", "FACTOR", "QUALITY_VALUE"]:
+        # S08: Quality & Value Factor
+        universe = kwargs.get("universe", DEFAULT_FACTOR_UNIVERSE)
+        print(f"\n🚀 [S08] 加载基本面多因子候选池 ({len(universe)}只标的)...")
+        prices_df = loader.load_multi_data(universe, lookback_years=lookback_years)
+        qf = QualityValueFactorStrategy(universe=universe, top_n=5, target_weight_per_stock=0.15)
+        weights_df = qf.compute_target_weights(prices_df)
+        
+        # Benchmark: Equal-weight buy & hold of the universe
+        norm_prices = prices_df.divide(prices_df.iloc[0])
+        benchmark_series = norm_prices.mean(axis=1) * prices_df.iloc[0].mean()
+        result = p_engine.run(
+            prices_df=prices_df,
+            target_weights_df=weights_df,
+            strategy_name="S08_QualityValueFactor",
+            benchmark_series=benchmark_series,
+            benchmark_name="Universe Equal-Weight",
+        )
+
+    else:
+        print(f"❌ 未知组合策略代码: {strategy_code}")
+        return None
+
+    print_comparison_table(result, is_portfolio=True)
+    chart_path = PortfolioVisualizer.plot_result(result)
+    print(f"\n📈 图表生成完毕！您可以在此处查看完整组合资产配置与收益走势：\n👉 {chart_path}\n")
     return result
 
 
 def interactive_menu():
-    """Provides a beginner-friendly interactive terminal menu."""
-    print("=" * 70)
-    print(" 🚀 美股交易策略回测系统 (U.S. Equity Trading Backtesting System) v1.0")
-    print("=" * 70)
+    """Interactive CLI menu for selecting from all 9 strategies."""
+    print("=" * 75)
+    print(" 🚀 美股交易策略回测系统 (U.S. Equity Trading Backtesting System) v2.0")
+    print("=" * 75)
+    print("\n请选择你想测试的交易策略体系：")
+    print("-----------------------------------------------------------------------")
+    print("【单股票技术指标策略 (Single-Stock Technical Strategies)】")
+    print("  1. [S01] 双均线交叉策略 (Dual MA Crossover - 趋势跟踪)")
+    print("  2. [S02] RSI 均值回归策略 (RSI Mean Reversion - 超卖低吸)")
+    print("  3. [S03] 唐奇安通道突破策略 (Donchian Channel Breakout - 突破交易)")
+    print("  5. [S05] 布林带挤压突破策略 (Bollinger Band Squeeze - 波动率突破)")
+    print("  6. [S06] 趋势回撤买入策略 (Trend Pullback - 顺大势逆小势)")
+    print("\n【多资产组合与宏观轮动策略 (Portfolio & Macro Rotation Strategies)】")
+    print("  4. [S04] 相对动量轮动策略 (Relative Momentum Rotation - 强中选强)")
+    print("  7. [S07] 阈值再平衡策略 (Threshold Rebalancing - 组合风险控制)")
+    print("  8. [S08] 质量与价值因子策略 (Quality & Value Factor - 财报基本面选股)")
+    print("  9. [S09] 双重动量策略 (Dual Momentum - 全球股债防御性轮动)")
+    print("-----------------------------------------------------------------------")
 
-    # 1. Stock selection
-    print("\n[步骤 1/4] 请输入你想测试的美股代码（例如：SPCX, TSLA, NVDA, AAPL）")
-    ticker_input = input("股票代码 [默认 NVDA]: ").strip().upper()
-    ticker = ticker_input if ticker_input else "NVDA"
+    choice = input("请输入策略编号 (1-9) [默认 1]: ").strip()
+    if not choice:
+        choice = "1"
 
-    # 2. Strategy selection
-    print("\n[步骤 2/4] 请选择交易策略：")
-    print("  1. 双均线交叉策略 (Dual MA Crossover: 20 SMA 金叉 50 SMA 买入，死叉卖出)")
-    print("  2. RSI 动量回归策略 (RSI Mean Reversion: RSI<30 超卖逢低买入，RSI>70 超买止盈)")
-    choice = input("请输入选项编号 (1 或 2) [默认 1]: ").strip()
+    choice_map = {
+        "1": "S01",
+        "2": "S02",
+        "3": "S03",
+        "4": "S04",
+        "5": "S05",
+        "6": "S06",
+        "7": "S07",
+        "8": "S08",
+        "9": "S09",
+    }
+    selected_code = choice_map.get(choice, "S01")
 
-    if choice == "2":
-        strategy_type = "rsi"
-    else:
-        strategy_type = "ma"
-
-    # 3. Timeframe
-    print("\n[步骤 3/4] 请选择回测时间跨度：")
+    # Timeframe selection
+    print("\n[回测时间跨度]")
     print("  1. 最近 3 年 (推荐)")
     print("  2. 最近 5 年")
     print("  3. 最近 1 年")
@@ -189,50 +319,35 @@ def interactive_menu():
     years_map = {"1": 3, "2": 5, "3": 1}
     lookback = years_map.get(time_choice, 3)
 
-    # 4. Capital
-    print("\n[步骤 4/4] 初始模拟资金 (USD) [默认 10,000]: ")
-    capital_input = input("资金金额: ").strip()
-    try:
-        capital = float(capital_input) if capital_input else 10000.0
-    except ValueError:
-        capital = 10000.0
-
-    print("\n🚀 开始启动回测引擎...\n")
-    run_backtest_pipeline(
-        ticker=ticker,
-        strategy_type=strategy_type,
-        lookback_years=lookback,
-        initial_capital=capital,
-    )
+    if selected_code in ["S01", "S02", "S03", "S05", "S06"]:
+        print("\n[股票代码选择]")
+        ticker_input = input("请输入测试的美股代码（如 NVDA, TSLA, SPCX）[默认 NVDA]: ").strip().upper()
+        ticker = ticker_input if ticker_input else "NVDA"
+        run_single_stock_pipeline(ticker=ticker, strategy_code=selected_code, lookback_years=lookback)
+    else:
+        run_portfolio_pipeline(strategy_code=selected_code, lookback_years=lookback)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="U.S. Equity Trading Strategy Backtesting System")
-    parser.add_argument("--ticker", "-t", type=str, help="Stock symbol (e.g. NVDA, TSLA, AAPL)")
-    parser.add_argument("--strategy", "-s", type=str, choices=["ma", "rsi"], default="ma", help="Strategy type")
+    parser = argparse.ArgumentParser(description="U.S. Equity Trading Strategy Backtesting System v2.0")
+    parser.add_argument("--strategy", "-s", type=str, help="Strategy code (s01-s09 or ma, rsi, donchian, momentum, bollinger, pullback, rebalance, factor, dual_momentum)")
+    parser.add_argument("--ticker", "-t", type=str, default=None, help="Stock symbol for single-stock strategies (e.g. NVDA, TSLA, SPCX)")
     parser.add_argument("--years", "-y", type=int, default=3, help="Lookback years (default: 3)")
-    parser.add_argument("--start", type=str, default=None, help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--end", type=str, default=None, help="End date (YYYY-MM-DD)")
-    parser.add_argument("--capital", "-c", type=float, default=10000.0, help="Initial capital (default: 10000)")
-    parser.add_argument("--short-ma", type=int, default=20, help="Short MA window (default: 20)")
-    parser.add_argument("--long-ma", type=int, default=50, help="Long MA window (default: 50)")
+    parser.add_argument("--capital", "-c", type=float, default=None, help="Initial capital (default: 10000 for single, 100000 for portfolio)")
 
     args = parser.parse_args()
 
-    # If no ticker passed via CLI, launch interactive wizard
-    if not args.ticker:
+    if not args.strategy:
         interactive_menu()
     else:
-        run_backtest_pipeline(
-            ticker=args.ticker,
-            strategy_type=args.strategy,
-            start_date=args.start,
-            end_date=args.end,
-            lookback_years=args.years,
-            initial_capital=args.capital,
-            short_window=args.short_ma,
-            long_window=args.long_ma,
-        )
+        strat = args.strategy.lower()
+        if strat in ["s01", "ma", "s02", "rsi", "s03", "donchian", "s05", "bollinger", "bb", "s06", "pullback"]:
+            ticker = args.ticker if args.ticker else "NVDA"
+            capital = args.capital if args.capital else 10000.0
+            run_single_stock_pipeline(ticker=ticker, strategy_code=strat, lookback_years=args.years, initial_capital=capital)
+        else:
+            capital = args.capital if args.capital else 100000.0
+            run_portfolio_pipeline(strategy_code=strat, lookback_years=args.years, initial_capital=capital)
 
 
 if __name__ == "__main__":
