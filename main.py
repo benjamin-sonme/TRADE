@@ -278,26 +278,29 @@ def run_portfolio_pipeline(
     return result
 
 
+MENU_TEXT = """===========================================================================
+ 🚀 美股交易策略回测系统 (U.S. Equity Trading Backtesting System) v2.0
+===========================================================================
+请选择你想测试的交易策略体系：
+-----------------------------------------------------------------------
+【单股票技术指标策略 (Single-Stock Technical Strategies)】
+  1. [S01] 双均线交叉策略 (Dual MA Crossover - 趋势跟踪)
+  2. [S02] RSI 均值回归策略 (RSI Mean Reversion - 超卖低吸)
+  3. [S03] 唐奇安通道突破策略 (Donchian Channel Breakout - 突破交易)
+  5. [S05] 布林带挤压突破策略 (Bollinger Band Squeeze - 波动率突破)
+  6. [S06] 趋势回撤买入策略 (Trend Pullback - 顺大势逆小势)
+
+【多资产组合与宏观轮动策略 (Portfolio & Macro Rotation Strategies)】
+  4. [S04] 相对动量轮动策略 (Relative Momentum Rotation - 强中选强)
+  7. [S07] 阈值再平衡策略 (Threshold Rebalancing - 组合风险控制)
+  8. [S08] 质量与价值因子策略 (Quality & Value Factor - 财报基本面选股)
+  9. [S09] 双重动量策略 (Dual Momentum - 全球股债防御性轮动)
+-----------------------------------------------------------------------"""
+
+
 def interactive_menu():
     """Interactive CLI menu for selecting from all 9 strategies."""
-    print("=" * 75)
-    print(" 🚀 美股交易策略回测系统 (U.S. Equity Trading Backtesting System) v2.0")
-    print("=" * 75)
-    print("\n请选择你想测试的交易策略体系：")
-    print("-----------------------------------------------------------------------")
-    print("【单股票技术指标策略 (Single-Stock Technical Strategies)】")
-    print("  1. [S01] 双均线交叉策略 (Dual MA Crossover - 趋势跟踪)")
-    print("  2. [S02] RSI 均值回归策略 (RSI Mean Reversion - 超卖低吸)")
-    print("  3. [S03] 唐奇安通道突破策略 (Donchian Channel Breakout - 突破交易)")
-    print("  5. [S05] 布林带挤压突破策略 (Bollinger Band Squeeze - 波动率突破)")
-    print("  6. [S06] 趋势回撤买入策略 (Trend Pullback - 顺大势逆小势)")
-    print("\n【多资产组合与宏观轮动策略 (Portfolio & Macro Rotation Strategies)】")
-    print("  4. [S04] 相对动量轮动策略 (Relative Momentum Rotation - 强中选强)")
-    print("  7. [S07] 阈值再平衡策略 (Threshold Rebalancing - 组合风险控制)")
-    print("  8. [S08] 质量与价值因子策略 (Quality & Value Factor - 财报基本面选股)")
-    print("  9. [S09] 双重动量策略 (Dual Momentum - 全球股债防御性轮动)")
-    print("-----------------------------------------------------------------------")
-
+    print(MENU_TEXT)
     choice = input("请输入策略编号 (1-9) [默认 1]: ").strip() or "1"
 
     choice_map = {
