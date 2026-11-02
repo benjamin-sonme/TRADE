@@ -33,10 +33,19 @@ except ImportError:
                 col_widths[i] = max(col_widths[i], len(str(cell)))
         lines = []
         if headers:
-            lines.append("  ".join(str(h).ljust(col_widths[i]) for i, h in enumerate(headers)))
-            lines.append("-" * (sum(col_widths) + len(col_widths) * 2))
-        for row in table_data:
-            lines.append("  ".join(str(cell).ljust(col_widths[i]) for i, cell in enumerate(row)))
+            lines.extend(
+                (
+                    "  ".join(
+                        str(h).ljust(col_widths[i])
+                        for i, h in enumerate(headers)
+                    ),
+                    "-" * (sum(col_widths) + len(col_widths) * 2),
+                )
+            )
+        lines.extend(
+            "  ".join(str(cell).ljust(col_widths[i]) for i, cell in enumerate(row))
+            for row in table_data
+        )
         return "\n".join(lines)
 
 from backtester.data_loader import DataLoader
@@ -60,15 +69,11 @@ from backtester.strategies.dual_momentum import DualMomentumStrategy
 
 
 def format_pct(val: float) -> str:
-    if val is None or val != val:
-        return "N/A"
-    return f"{val * 100:+.2f}%"
+    return "N/A" if (val is None or val != val) else f"{val * 100:+.2f}%"
 
 
 def format_float(val: float, precision: int = 2) -> str:
-    if val is None or val != val:
-        return "N/A"
-    return f"{val:.{precision}f}"
+    return "N/A" if (val is None or val != val) else f"{val:.{precision}f}"
 
 
 def print_comparison_table(result, is_portfolio: bool = False):
@@ -138,7 +143,7 @@ def run_single_stock_pipeline(
 ):
     """Executes single stock strategy backtest (S01, S02, S03, S05, S06)."""
     ticker = ticker.strip().upper()
-    if ticker in ["SPACEX", "SPACE-X", "SPACE_X"]:
+    if ticker in {"SPACEX", "SPACE-X", "SPACE_X"}:
         print("\n🚀 提示：SpaceX 已在纳斯达克挂牌上市，股票代码为 SPCX。已自动为您切换为代码 SPCX 进行回测分析！\n")
         ticker = "SPCX"
 
@@ -150,21 +155,21 @@ def run_single_stock_pipeline(
         return None
 
     code = strategy_code.upper()
-    if code in ["S01", "MA"]:
+    if code in {"S01", "MA"}:
         strategy = DualMACrossoverStrategy(
             short_window=kwargs.get("short_ma", 20),
             long_window=kwargs.get("long_ma", 50),
         )
-    elif code in ["S02", "RSI"]:
+    elif code in {"S02", "RSI"}:
         strategy = RSIStrategy(period=14, oversold=30.0, overbought=70.0, use_trend_filter=True)
-    elif code in ["S03", "DONCHIAN"]:
+    elif code in {"S03", "DONCHIAN"}:
         strategy = DonchianBreakoutStrategy(
             entry_window=kwargs.get("entry_window", 20),
             exit_window=kwargs.get("exit_window", 10),
         )
-    elif code in ["S05", "BOLLINGER", "BB"]:
+    elif code in {"S05", "BOLLINGER", "BB"}:
         strategy = BollingerBandSqueezeStrategy(period=20, std_dev=2.0, squeeze_percentile=10.0)
-    elif code in ["S06", "PULLBACK"]:
+    elif code in {"S06", "PULLBACK"}:
         strategy = TrendPullbackStrategy(sma_fast=20, sma_mid=50, sma_slow=200)
     else:
         print(f"❌ 未知单股策略代码: {strategy_code}")
@@ -194,7 +199,7 @@ def run_portfolio_pipeline(
     p_engine = PortfolioEngine(initial_capital=initial_capital)
     code = strategy_code.upper()
 
-    if code in ["S09", "DUAL_MOMENTUM"]:
+    if code in {"S09", "DUAL_MOMENTUM"}:
         # S09: Dual Momentum (SPY, VEU, BIL)
         print("\n🚀 [S09] 加载宏观核心资产: SPY (美股), VEU (全球除美), BIL (1-3月短期国债/现金)...")
         prices_df = loader.load_multi_data(["SPY", "VEU", "BIL"], lookback_years=lookback_years)
@@ -208,7 +213,7 @@ def run_portfolio_pipeline(
             benchmark_name="SPY (US Equities)",
         )
 
-    elif code in ["S04", "RELATIVE_MOMENTUM"]:
+    elif code in {"S04", "RELATIVE_MOMENTUM"}:
         # S04: Relative Momentum Rotation
         universe = kwargs.get("universe", ["NVDA", "TSLA", "SPCX", "AAPL", "MSFT", "AMZN", "GOOGL", "META"])
         print(f"\n🚀 [S04] 加载候选股票池 ({len(universe)}只标的): {', '.join(universe)}...")
@@ -227,7 +232,7 @@ def run_portfolio_pipeline(
             benchmark_name="Equal-Weight Buy & Hold",
         )
 
-    elif code in ["S07", "REBALANCE"]:
+    elif code in {"S07", "REBALANCE"}:
         # S07: Threshold Rebalancing
         universe = kwargs.get("universe", ["NVDA", "TSLA", "SPCX", "AAPL"])
         print(f"\n🚀 [S07] 加载组合持仓 ({len(universe)}只核心标的): {', '.join(universe)}...")
@@ -244,7 +249,7 @@ def run_portfolio_pipeline(
             benchmark_name="Buy & Hold (No Rebalance)",
         )
 
-    elif code in ["S08", "FACTOR", "QUALITY_VALUE"]:
+    elif code in {"S08", "FACTOR", "QUALITY_VALUE"}:
         # S08: Quality & Value Factor
         universe = kwargs.get("universe", DEFAULT_FACTOR_UNIVERSE)
         print(f"\n🚀 [S08] 加载基本面多因子候选池 ({len(universe)}只标的)...")
@@ -293,9 +298,7 @@ def interactive_menu():
     print("  9. [S09] 双重动量策略 (Dual Momentum - 全球股债防御性轮动)")
     print("-----------------------------------------------------------------------")
 
-    choice = input("请输入策略编号 (1-9) [默认 1]: ").strip()
-    if not choice:
-        choice = "1"
+    choice = input("请输入策略编号 (1-9) [默认 1]: ").strip() or "1"
 
     choice_map = {
         "1": "S01",
@@ -315,15 +318,14 @@ def interactive_menu():
     print("  1. 最近 3 年 (推荐)")
     print("  2. 最近 5 年")
     print("  3. 最近 1 年")
-    time_choice = input("请输入选项编号 [默认 1]: ").strip()
+    time_choice = input("请输入选项编号 [默认 1]: ").strip() or "1"
     years_map = {"1": 3, "2": 5, "3": 1}
     lookback = years_map.get(time_choice, 3)
 
-    if selected_code in ["S01", "S02", "S03", "S05", "S06"]:
+    if selected_code in {"S01", "S02", "S03", "S05", "S06"}:
         print("\n[股票代码选择]")
-        ticker_input = input("请输入测试的美股代码（如 NVDA, TSLA, SPCX）[默认 NVDA]: ").strip().upper()
-        ticker = ticker_input if ticker_input else "NVDA"
-        run_single_stock_pipeline(ticker=ticker, strategy_code=selected_code, lookback_years=lookback)
+        ticker_input = input("请输入测试的美股代码（如 NVDA, TSLA, SPCX）[默认 NVDA]: ").strip().upper() or "NVDA"
+        run_single_stock_pipeline(ticker=ticker_input, strategy_code=selected_code, lookback_years=lookback)
     else:
         run_portfolio_pipeline(strategy_code=selected_code, lookback_years=lookback)
 
@@ -341,12 +343,13 @@ def main():
         interactive_menu()
     else:
         strat = args.strategy.lower()
-        if strat in ["s01", "ma", "s02", "rsi", "s03", "donchian", "s05", "bollinger", "bb", "s06", "pullback"]:
-            ticker = args.ticker if args.ticker else "NVDA"
-            capital = args.capital if args.capital else 10000.0
+        single_strats = {"s01", "ma", "s02", "rsi", "s03", "donchian", "s05", "bollinger", "bb", "s06", "pullback"}
+        if strat in single_strats:
+            ticker = args.ticker or "NVDA"
+            capital = args.capital or 10000.0
             run_single_stock_pipeline(ticker=ticker, strategy_code=strat, lookback_years=args.years, initial_capital=capital)
         else:
-            capital = args.capital if args.capital else 100000.0
+            capital = args.capital or 100000.0
             run_portfolio_pipeline(strategy_code=strat, lookback_years=args.years, initial_capital=capital)
 
 
