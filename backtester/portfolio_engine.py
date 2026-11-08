@@ -64,6 +64,7 @@ class PortfolioEngine:
         strategy_name: str = "PortfolioStrategy",
         benchmark_series: Optional[pd.Series] = None,
         benchmark_name: str = "Benchmark",
+        eval_days: Optional[int] = None,
     ) -> PortfolioBacktestResult:
         """
         Runs portfolio simulation.
@@ -72,6 +73,21 @@ class PortfolioEngine:
           Index contains rebalance dates (e.g. month ends).
           Columns are asset tickers (weights should sum to <= 1.0; remainder is cash).
         """
+        # Slice to evaluation window if requested
+        if eval_days is not None and 0 < eval_days < len(prices_df):
+            eval_start_date = prices_df.index[-eval_days]
+            prices_df = prices_df.iloc[-eval_days:].copy()
+            # If benchmark exists, slice too
+            if benchmark_series is not None:
+                benchmark_series = benchmark_series.loc[prices_df.index]
+            # Ensure at least the starting allocation exists in target_weights_df
+            prior_weights = target_weights_df[target_weights_df.index <= eval_start_date]
+            future_weights = target_weights_df[target_weights_df.index > eval_start_date]
+            if not prior_weights.empty:
+                last_w = prior_weights.iloc[[-1]].copy()
+                last_w.index = [prices_df.index[0]]
+                target_weights_df = pd.concat([last_w, future_weights])
+
         # Ensure dates align
         common_index = prices_df.index
         assets = list(prices_df.columns)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 U.S. Equity Trading Strategy Backtesting System
-美股交易策略回测系统 (v2.0)
+美股交易策略回测系统 (v2.1)
 
 Supports 9 Classic Trading & Portfolio Strategies:
 S01. Dual MA Crossover (双均线交叉)
@@ -21,7 +21,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import argparse
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 try:
     from tabulate import tabulate
@@ -53,6 +53,8 @@ from backtester.engine import BacktestEngine
 from backtester.visualizer import Visualizer
 from backtester.portfolio_engine import PortfolioEngine, PortfolioBacktestResult
 from backtester.portfolio_visualizer import PortfolioVisualizer
+from backtester.risk_analyzer import assess_investment_risk, print_risk_assessment_card
+from backtester.universe import NASDAQ_TOP_50_TICKERS, NASDAQ_TOP_50_MAP, print_nasdaq_top50_list
 
 # Single stock strategies
 from backtester.strategies.ma_crossover import DualMACrossoverStrategy
@@ -68,6 +70,21 @@ from backtester.strategies.quality_value_factor import QualityValueFactorStrateg
 from backtester.strategies.dual_momentum import DualMomentumStrategy
 
 
+TIMEFRAME_PRESETS = {
+    "1": {"code": "3y", "label": "最近 3 年 (推荐)", "eval_days": 756, "years": 3},
+    "2": {"code": "5y", "label": "最近 5 年", "eval_days": 1260, "years": 5},
+    "3": {"code": "1y", "label": "最近 1 年", "eval_days": 252, "years": 1},
+    "4": {"code": "6m", "label": "最近半年 (6个月)", "eval_days": 126, "years": 1},
+    "5": {"code": "1m", "label": "最近 1 个月", "eval_days": 21, "years": 1},
+    "6": {"code": "1w", "label": "最近 1 周 (5个交易日)", "eval_days": 5, "years": 1},
+    "7": {"code": "3d", "label": "最近 3 天 (3个交易日)", "eval_days": 3, "years": 1},
+}
+
+TIMEFRAME_CODE_MAP = {
+    cfg["code"]: cfg for cfg in TIMEFRAME_PRESETS.values()
+}
+
+
 def format_pct(val: float) -> str:
     return "N/A" if (val is None or val != val) else f"{val * 100:+.2f}%"
 
@@ -77,7 +94,7 @@ def format_float(val: float, precision: int = 2) -> str:
 
 
 def print_comparison_table(result, is_portfolio: bool = False):
-    """Prints a beautiful comparison table between Strategy and Benchmark."""
+    """Prints a beautiful comparison table and investment risk assessment card."""
     m = result.metrics
 
     strat_header = f"Strategy ({result.strategy_name})"
@@ -113,7 +130,7 @@ def print_comparison_table(result, is_portfolio: bool = False):
     print(tabulate(table_data, headers=headers, tablefmt="fancy_grid"))
     print("=" * 75)
 
-    # Strategy takeaways
+    # 1. Strategy Diagnostic Takeaways
     print("\n💡 策略诊断解读 (Strategy Takeaways for Beginners):")
     strat_ret = m["Strategy Total Return"]
     bench_ret = m["Benchmark Total Return"]
@@ -133,12 +150,46 @@ def print_comparison_table(result, is_portfolio: bool = False):
     if strat_sharpe > 1.0:
         print(f"  ✅ 夏普比率 ({strat_sharpe:.2f}) 处于优异区间 (>1.0)，风险调整后超额收益出色。")
 
+    # 2. Comprehensive Investment Risk Rating Card
+    risk_profile = assess_investment_risk(m, ticker=title)
+    print_risk_assessment_card(risk_profile)
+
+
+def handle_chart_generation(
+    result,
+    is_portfolio: bool = False,
+    auto_chart: Optional[bool] = None,
+):
+    """
+    Asks the user for confirmation before generating and saving visualization charts.
+    """
+    if auto_chart is True:
+        proceed = True
+    elif auto_chart is False:
+        proceed = False
+    else:
+        # Prompt user interactively
+        ans = input("📊 是否生成并保存高清可视化分析图表至 reports/ 目录？(y/n) [默认 y]: ").strip().lower()
+        proceed = ans in {"", "y", "yes"}
+
+    if proceed:
+        print("🎨 正在渲染高清可视化分析图表，请稍候...")
+        if is_portfolio:
+            chart_path = PortfolioVisualizer.plot_result(result)
+        else:
+            chart_path = Visualizer.plot_result(result)
+        print(f"📈 图表生成完毕！您可以在此处查看完整走势图：\n👉 {chart_path}\n")
+    else:
+        print("\n⏩ [已跳过图表生成]\n")
+
 
 def run_single_stock_pipeline(
     ticker: str,
     strategy_code: str,
     lookback_years: int = 3,
+    eval_days: Optional[int] = None,
     initial_capital: float = 10000.0,
+    auto_chart: Optional[bool] = None,
     **kwargs,
 ):
     """Executes single stock strategy backtest (S01, S02, S03, S05, S06)."""
@@ -180,18 +231,19 @@ def run_single_stock_pipeline(
         commission_per_trade=kwargs.get("commission", 0.0),
         slippage_bps=kwargs.get("slippage_bps", 5.0),
     )
-    result = engine.run(data, strategy, ticker=ticker)
+    result = engine.run(data, strategy, ticker=ticker, eval_days=eval_days)
 
     print_comparison_table(result, is_portfolio=False)
-    chart_path = Visualizer.plot_result(result)
-    print(f"\n📈 图表生成完毕！您可以在此处查看完整可视化收益曲线：\n👉 {chart_path}\n")
+    handle_chart_generation(result, is_portfolio=False, auto_chart=auto_chart)
     return result
 
 
 def run_portfolio_pipeline(
     strategy_code: str,
     lookback_years: int = 3,
+    eval_days: Optional[int] = None,
     initial_capital: float = 100000.0,
+    auto_chart: Optional[bool] = None,
     **kwargs,
 ):
     """Executes multi-asset / portfolio strategy backtest (S04, S07, S08, S09)."""
@@ -211,12 +263,13 @@ def run_portfolio_pipeline(
             strategy_name="S09_DualMomentum",
             benchmark_series=prices_df["SPY"],
             benchmark_name="SPY (US Equities)",
+            eval_days=eval_days,
         )
 
     elif code in {"S04", "RELATIVE_MOMENTUM"}:
         # S04: Relative Momentum Rotation
-        universe = kwargs.get("universe", ["NVDA", "TSLA", "SPCX", "AAPL", "MSFT", "AMZN", "GOOGL", "META"])
-        print(f"\n🚀 [S04] 加载候选股票池 ({len(universe)}只标的): {', '.join(universe)}...")
+        universe = kwargs.get("universe") or ["NVDA", "TSLA", "SPCX", "AAPL", "MSFT", "AMZN", "GOOGL", "META"]
+        print(f"\n🚀 [S04] 加载候选股票池 ({len(universe)}只标的): {', '.join(universe[:10])}{' ...' if len(universe) > 10 else ''}...")
         prices_df = loader.load_multi_data(universe, lookback_years=lookback_years)
         rm = RelativeMomentumRotation(top_n=4, target_weight_per_stock=0.20)
         weights_df = rm.compute_target_weights(prices_df)
@@ -230,15 +283,15 @@ def run_portfolio_pipeline(
             strategy_name="S04_RelativeMomentumRotation",
             benchmark_series=benchmark_series,
             benchmark_name="Equal-Weight Buy & Hold",
+            eval_days=eval_days,
         )
 
     elif code in {"S07", "REBALANCE"}:
         # S07: Threshold Rebalancing
-        universe = kwargs.get("universe", ["NVDA", "TSLA", "SPCX", "AAPL"])
-        print(f"\n🚀 [S07] 加载组合持仓 ({len(universe)}只核心标的): {', '.join(universe)}...")
+        universe = kwargs.get("universe") or ["NVDA", "TSLA", "SPCX", "AAPL"]
+        print(f"\n🚀 [S07] 加载组合持仓 ({len(universe)}只核心标的): {', '.join(universe[:10])}...")
         prices_df = loader.load_multi_data(universe, lookback_years=lookback_years)
         
-        # Target weight: equal across stocks (e.g. 20% each), remainder in cash
         tw_per_stock = 0.80 / len(universe)
         target_weights = {asset: tw_per_stock for asset in universe}
         tr = ThresholdRebalancing(target_weights=target_weights, target_cash_pct=0.20, band_pct=0.25)
@@ -247,11 +300,12 @@ def run_portfolio_pipeline(
             prices_df=prices_df,
             initial_capital=initial_capital,
             benchmark_name="Buy & Hold (No Rebalance)",
+            eval_days=eval_days,
         )
 
     elif code in {"S08", "FACTOR", "QUALITY_VALUE"}:
         # S08: Quality & Value Factor
-        universe = kwargs.get("universe", DEFAULT_FACTOR_UNIVERSE)
+        universe = kwargs.get("universe") or DEFAULT_FACTOR_UNIVERSE
         print(f"\n🚀 [S08] 加载基本面多因子候选池 ({len(universe)}只标的)...")
         prices_df = loader.load_multi_data(universe, lookback_years=lookback_years)
         qf = QualityValueFactorStrategy(universe=universe, top_n=5, target_weight_per_stock=0.15)
@@ -266,6 +320,7 @@ def run_portfolio_pipeline(
             strategy_name="S08_QualityValueFactor",
             benchmark_series=benchmark_series,
             benchmark_name="Universe Equal-Weight",
+            eval_days=eval_days,
         )
 
     else:
@@ -273,13 +328,12 @@ def run_portfolio_pipeline(
         return None
 
     print_comparison_table(result, is_portfolio=True)
-    chart_path = PortfolioVisualizer.plot_result(result)
-    print(f"\n📈 图表生成完毕！您可以在此处查看完整组合资产配置与收益走势：\n👉 {chart_path}\n")
+    handle_chart_generation(result, is_portfolio=True, auto_chart=auto_chart)
     return result
 
 
 MENU_TEXT = """===========================================================================
- 🚀 美股交易策略回测系统 (U.S. Equity Trading Backtesting System) v2.0
+ 🚀 美股交易策略回测系统 (U.S. Equity Trading Backtesting System) v2.1
 ===========================================================================
 请选择你想测试的交易策略体系：
 -----------------------------------------------------------------------
@@ -316,31 +370,85 @@ def interactive_menu():
     }
     selected_code = choice_map.get(choice, "S01")
 
-    # Timeframe selection
+    # Timeframe selection (Expanded to 7 tiers!)
     print("\n[回测时间跨度]")
-    print("  1. 最近 3 年 (推荐)")
-    print("  2. 最近 5 年")
-    print("  3. 最近 1 年")
-    time_choice = input("请输入选项编号 [默认 1]: ").strip() or "1"
-    years_map = {"1": 3, "2": 5, "3": 1}
-    lookback = years_map.get(time_choice, 3)
+    for key, val in TIMEFRAME_PRESETS.items():
+        print(f"  {key}. {val['label']}")
+    time_choice = input("请输入时间档位编号 (1-7) [默认 1]: ").strip() or "1"
+    tf_info = TIMEFRAME_PRESETS.get(time_choice, TIMEFRAME_PRESETS["1"])
+    eval_days = tf_info["eval_days"]
+    years = tf_info["years"]
 
     if selected_code in {"S01", "S02", "S03", "S05", "S06"}:
         print("\n[股票代码选择]")
-        ticker_input = input("请输入测试的美股代码（如 NVDA, TSLA, SPCX）[默认 NVDA]: ").strip().upper() or "NVDA"
-        run_single_stock_pipeline(ticker=ticker_input, strategy_code=selected_code, lookback_years=lookback)
+        print("💡 提示：输入美股代码即可；输入 '?' 可查看纳斯达克市值前50强公司名单。")
+        while True:
+            ticker_input = input("请输入测试的美股代码（如 NVDA, TSLA, SPCX）[默认 NVDA]: ").strip().upper()
+            if ticker_input in {"?", "LIST", "TOP50"}:
+                print_nasdaq_top50_list()
+                continue
+            ticker = ticker_input or "NVDA"
+            break
+
+        run_single_stock_pipeline(
+            ticker=ticker,
+            strategy_code=selected_code,
+            lookback_years=years,
+            eval_days=eval_days,
+        )
     else:
-        run_portfolio_pipeline(strategy_code=selected_code, lookback_years=lookback)
+        # Portfolio strategy pool selection
+        print("\n[资产池选择 (Universe Selection)]")
+        print("  1. 核心精选科技资产池 (Mag 7: NVDA, TSLA, SPCX, AAPL, MSFT, AMZN, GOOGL, META)")
+        print(f"  2. 纳斯达克市值前 50 强标的池 (Nasdaq Top 50: 共 {len(NASDAQ_TOP_50_TICKERS)} 家龙头)")
+        print("  3. 查看纳斯达克 Top 50 详细名单")
+        pool_choice = input("请选择资产池 (1/2/3) [默认 1]: ").strip() or "1"
+
+        if pool_choice == "3":
+            print_nasdaq_top50_list()
+            pool_choice = input("请选择资产池 (1: 核心科技池, 2: 纳斯达克前50) [默认 1]: ").strip() or "1"
+
+        if pool_choice == "2":
+            selected_universe = NASDAQ_TOP_50_TICKERS
+        else:
+            selected_universe = ["NVDA", "TSLA", "SPCX", "AAPL", "MSFT", "AMZN", "GOOGL", "META"]
+
+        run_portfolio_pipeline(
+            strategy_code=selected_code,
+            lookback_years=years,
+            eval_days=eval_days,
+            universe=selected_universe,
+        )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="U.S. Equity Trading Strategy Backtesting System v2.0")
+    parser = argparse.ArgumentParser(description="U.S. Equity Trading Strategy Backtesting System v2.1")
     parser.add_argument("--strategy", "-s", type=str, help="Strategy code (s01-s09 or ma, rsi, donchian, momentum, bollinger, pullback, rebalance, factor, dual_momentum)")
-    parser.add_argument("--ticker", "-t", type=str, default=None, help="Stock symbol for single-stock strategies (e.g. NVDA, TSLA, SPCX)")
+    parser.add_argument("--ticker", "-t", type=str, default=None, help="Stock symbol for single-stock strategies (e.g. NVDA, TSLA, SPCX, or 'top50')")
+    parser.add_argument("--timeframe", "-p", type=str, choices=["5y", "3y", "1y", "6m", "1m", "1w", "3d"], default=None, help="Timeframe (5y, 3y, 1y, 6m, 1m, 1w, 3d)")
     parser.add_argument("--years", "-y", type=int, default=3, help="Lookback years (default: 3)")
     parser.add_argument("--capital", "-c", type=float, default=None, help="Initial capital (default: 10000 for single, 100000 for portfolio)")
+    parser.add_argument("--nasdaq-top50", action="store_true", help="Use Nasdaq Top 50 universe")
+    parser.add_argument("--chart", action="store_true", help="Auto generate charts without prompting")
+    parser.add_argument("--no-chart", action="store_true", help="Skip charts without prompting")
 
     args = parser.parse_args()
+
+    # Determine auto_chart preference
+    auto_chart = None
+    if args.chart:
+        auto_chart = True
+    elif args.no_chart:
+        auto_chart = False
+
+    # Determine evaluation days from timeframe argument
+    eval_days = None
+    years = args.years
+    if args.timeframe:
+        tf_cfg = TIMEFRAME_CODE_MAP.get(args.timeframe.lower())
+        if tf_cfg:
+            eval_days = tf_cfg["eval_days"]
+            years = tf_cfg["years"]
 
     if not args.strategy:
         interactive_menu()
@@ -350,10 +458,25 @@ def main():
         if strat in single_strats:
             ticker = args.ticker or "NVDA"
             capital = args.capital or 10000.0
-            run_single_stock_pipeline(ticker=ticker, strategy_code=strat, lookback_years=args.years, initial_capital=capital)
+            run_single_stock_pipeline(
+                ticker=ticker,
+                strategy_code=strat,
+                lookback_years=years,
+                eval_days=eval_days,
+                initial_capital=capital,
+                auto_chart=auto_chart,
+            )
         else:
             capital = args.capital or 100000.0
-            run_portfolio_pipeline(strategy_code=strat, lookback_years=args.years, initial_capital=capital)
+            universe = NASDAQ_TOP_50_TICKERS if args.nasdaq_top50 else None
+            run_portfolio_pipeline(
+                strategy_code=strat,
+                lookback_years=years,
+                eval_days=eval_days,
+                initial_capital=capital,
+                universe=universe,
+                auto_chart=auto_chart,
+            )
 
 
 if __name__ == "__main__":

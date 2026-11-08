@@ -5,7 +5,7 @@ and computes comparative performance against Buy & Hold.
 """
 
 from dataclasses import dataclass
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import pandas as pd
 import numpy as np
 from .strategies.base import BaseStrategy
@@ -57,19 +57,28 @@ class BacktestEngine:
         self.slippage_pct = slippage_bps / 10000.0
         self.risk_free_rate = risk_free_rate
 
-    def run(self, df: pd.DataFrame, strategy: BaseStrategy, ticker: str = "TICKER") -> BacktestResult:
+    def run(
+        self,
+        df: pd.DataFrame,
+        strategy: BaseStrategy,
+        ticker: str = "TICKER",
+        eval_days: Optional[int] = None,
+    ) -> BacktestResult:
         """Runs the backtest on the given DataFrame using the given Strategy."""
-        # 1. Generate signals
+        # 1. Generate signals on full warmed-up history
         data = strategy.generate_signals(df)
 
         if "Signal" not in data.columns:
             raise ValueError(f"Strategy {strategy.name} must produce a 'Signal' column.")
 
         # 2. Shift signals by 1 to prevent lookahead bias (Execution happens after signal bar)
-        # Position at day T is determined by signal at day T-1
         data["Position"] = data["Signal"].shift(1).fillna(0)
 
-        # Detect position changes (trades)
+        # 3. Slice to evaluation window if requested (e.g. last 3 days, 1 week, 1 month, 6 months)
+        if eval_days is not None and eval_days < len(data) and eval_days > 0:
+            data = data.iloc[-eval_days:].copy()
+
+        # Detect position changes (trades) in the evaluation window
         data["Position_Change"] = data["Position"].diff().fillna(data["Position"])
 
         # 3. Simulate day-by-day cash, holdings, and portfolio equity

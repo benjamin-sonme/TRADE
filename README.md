@@ -1,6 +1,26 @@
-# U.S. Equity Trading Strategy Backtesting System (美股交易策略回测系统 v2.0)
+# U.S. Equity Trading Strategy Backtesting System (美股交易策略回测系统 v2.1)
 
 专为美股交易者设计的策略回测、资产配置与决策辅助系统。用于验证交易策略在真实历史行情中的表现，克服主观交易中的“犹豫不决”与“冲动下单”，建立基于数据和纪律的量化认知。
+
+---
+
+## 🌟 新版本 v2.1 核心特性 (Key Updates)
+
+1. **多档位回测周期支持 (7 档时间周期)**：
+   - 现已支持 **5年 (5y)**、**3年 (3y)**、**1年 (1y)**、**半年 (6m)**、**1个月 (1m)**、**1周 (1w)**、**3天 (3d)**。
+   - **底线指标充分预热 (Warm-up Protection)**：超短周期（如 3 天、1 周）回测先预载充分的历史数据计算技术指标（如 200 日线、RSI、布林带），再在目标窗口进行无偏差切片仿真，杜绝因样本过短导致的指标 NaN 失效。
+2. **纳斯达克市值前 50 强标的池 (Nasdaq Top 50 Universe)**：
+   - 内置涵盖 AAPL、NVDA、MSFT、AMZN、GOOGL、META、TSLA、AVGO、COST、ASML、SPCX 等 50 家龙头标的。
+   - 单股策略输入 `?` 或 `top50` 可一览完整清单；多资产策略（S04 动量轮动、S07 再平衡、S08 因子策略）可一键切换为纳指 50 强池。
+3. **企业与策略投资风险评级卡 (Investment Risk Rating R1~R4)**：
+   - 每次回测自动生成包含综合风险得分、风险等级与初学者风控红线的评价报告：
+     - 🟢 **R1 (低风险 - 稳健防御型)**：回撤极小、防御性极佳，建议仓位 25%~30%，适合作为核心底仓。
+     - 🟡 **R2 (中低风险 - 平衡稳健型)**：回撤可控、收益与风险平衡，建议仓位 15%~20%，适合波段配置。
+     - 🟠 **R3 (中高风险 - 进取成长型)**：波动较大、成长性强，建议单股仓位 8%~12%，严格执行 8%~10% 止损。
+     - 🔴 **R4 (极高风险 - 激进投机型)**：高波动、大回撤，单股仓位不得超过 5%，必须设硬止损。
+4. **图表生成授权交互 (Interactive Chart Confirmation)**：
+   - 回测完成后会在终端询问是否生成并保存图表 `(y/n) [默认 y]`，避免每次自动弹图与重复生成磁盘文件。
+   - 命令行支持 `--chart`（静默生成）与 `--no-chart`（静默跳过）自动化参数。
 
 ---
 
@@ -35,34 +55,31 @@
 
 #### 【单股技术指标策略】
 ```bash
-# S01: 测试 TSLA 双均线策略
-.venv/bin/python main.py --strategy s01 --ticker TSLA
+# 测试 NVDA 双均线策略 (默认3年)
+.venv/bin/python main.py --strategy s01 --ticker NVDA
 
-# S02: 测试 NVDA 的 RSI 均值回归策略
-.venv/bin/python main.py --strategy s02 --ticker NVDA
+# 测试 TSLA 唐奇安突破策略 (半年期，自动询问是否绘图)
+.venv/bin/python main.py --strategy s03 --ticker TSLA -p 6m
 
-# S03: 测试 TSLA 的唐奇安通道突破策略
-.venv/bin/python main.py --strategy s03 --ticker TSLA
+# 测试 NVDA 布林带挤压策略 (1个月期，跳过绘图)
+.venv/bin/python main.py --strategy s05 --ticker NVDA -p 1m --no-chart
 
-# S05: 测试 NVDA 的布林带挤压突破策略
-.venv/bin/python main.py --strategy s05 --ticker NVDA
-
-# S06: 测试 TSLA 的趋势回撤买入策略
-.venv/bin/python main.py --strategy s06 --ticker TSLA
+# 测试 SPCX (SpaceX) 趋势回撤策略 (3天超短周期)
+.venv/bin/python main.py --strategy s06 --ticker SPCX -p 3d
 ```
 
-#### 【多资产组合与宏观轮动策略】
+#### 【多资产组合与纳指50强轮动策略】
 ```bash
-# S04: 测试候选股票池的相对动量月度轮动策略
-.venv/bin/python main.py --strategy s04
+# S04: 相对动量轮动 (纳斯达克 Top 50 股票池，半年期)
+.venv/bin/python main.py --strategy s04 --nasdaq-top50 -p 6m
 
-# S07: 测试持仓组合的月度阈值动态再平衡策略
-.venv/bin/python main.py --strategy s07
+# S07: 阈值动态再平衡 (1年期)
+.venv/bin/python main.py --strategy s07 -p 1y
 
-# S08: 测试财报高质量与自由现金流价值因子策略
-.venv/bin/python main.py --strategy s08
+# S08: 财报高质量与价值因子策略 (纳斯达克 Top 50 股票池)
+.venv/bin/python main.py --strategy s08 --nasdaq-top50
 
-# S09: 测试 Gary Antonacci 经典的全球股债双重动量轮动策略 (SPY/VEU/BIL)
+# S09: Gary Antonacci 全球股债双重动量轮动 (SPY/VEU/BIL)
 .venv/bin/python main.py --strategy s09
 ```
 
@@ -100,8 +117,10 @@
 TRADE/
 ├── backtester/
 │   ├── data_loader.py            # 单股及多资产历史数据加载与本地缓存
-│   ├── engine.py                 # 单资产回测引擎（严格无前视偏差、滑点、手续费）
+│   ├── engine.py                 # 单资产回测引擎（严格无前视偏差、滑点、手续费、周期切片）
 │   ├── portfolio_engine.py       # 多资产组合与动态再平衡回测引擎
+│   ├── universe.py               # 纳斯达克市值前 50 强标的池映射与展示
+│   ├── risk_analyzer.py          # 投资风险评级模型 (R1~R4) 与初学者风控指南
 │   ├── metrics.py                # 收益率、夏普比率、最大回撤、波动率等量化指标
 │   ├── visualizer.py             # 单股买卖信号与水下回撤绘图
 │   ├── portfolio_visualizer.py   # 组合净值与动态资产配置堆积图绘制

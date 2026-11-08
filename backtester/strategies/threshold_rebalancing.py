@@ -59,10 +59,16 @@ class ThresholdRebalancing:
         commission_per_trade: float = 0.0,
         benchmark_series: Optional[pd.Series] = None,
         benchmark_name: str = "Benchmark",
+        eval_days: Optional[int] = None,
     ) -> PortfolioBacktestResult:
         """
         Runs monthly threshold evaluation and daily portfolio valuation.
         """
+        if eval_days is not None and 0 < eval_days < len(prices_df):
+            prices_df = prices_df.iloc[-eval_days:].copy()
+            if benchmark_series is not None:
+                benchmark_series = benchmark_series.loc[prices_df.index]
+
         assets = list(self.target_weights.keys())
         dates = pd.Series(prices_df.index, index=prices_df.index)
         month_end_dates = set(dates.groupby([dates.dt.year, dates.dt.month]).last().values)
