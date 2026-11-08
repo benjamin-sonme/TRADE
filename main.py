@@ -352,6 +352,21 @@ MENU_TEXT = """=================================================================
 -----------------------------------------------------------------------"""
 
 
+def select_portfolio_universe() -> List[str]:
+    """Interactive prompt to select asset universe for portfolio strategies."""
+    print("\n[资产池选择 (Universe Selection)]")
+    print("  1. 核心精选科技资产池 (Mag 7: NVDA, TSLA, SPCX, AAPL, MSFT, AMZN, GOOGL, META)")
+    print(f"  2. 纳斯达克市值前 50 强标的池 (Nasdaq Top 50: 共 {len(NASDAQ_TOP_50_TICKERS)} 家龙头)")
+    print("  3. 查看纳斯达克 Top 50 详细名单")
+    pool_choice = input("请选择资产池 (1/2/3) [默认 1]: ").strip() or "1"
+
+    if pool_choice == "3":
+        print_nasdaq_top50_list()
+        pool_choice = input("请选择资产池 (1: 核心科技池, 2: 纳斯达克前50) [默认 1]: ").strip() or "1"
+
+    return NASDAQ_TOP_50_TICKERS if pool_choice == "2" else ["NVDA", "TSLA", "SPCX", "AAPL", "MSFT", "AMZN", "GOOGL", "META"]
+
+
 def interactive_menu():
     """Interactive CLI menu for selecting from all 9 strategies."""
     print(MENU_TEXT)
@@ -397,27 +412,11 @@ def interactive_menu():
             eval_days=eval_days,
         )
     else:
-        # Portfolio strategy pool selection
-        print("\n[资产池选择 (Universe Selection)]")
-        print("  1. 核心精选科技资产池 (Mag 7: NVDA, TSLA, SPCX, AAPL, MSFT, AMZN, GOOGL, META)")
-        print(f"  2. 纳斯达克市值前 50 强标的池 (Nasdaq Top 50: 共 {len(NASDAQ_TOP_50_TICKERS)} 家龙头)")
-        print("  3. 查看纳斯达克 Top 50 详细名单")
-        pool_choice = input("请选择资产池 (1/2/3) [默认 1]: ").strip() or "1"
-
-        if pool_choice == "3":
-            print_nasdaq_top50_list()
-            pool_choice = input("请选择资产池 (1: 核心科技池, 2: 纳斯达克前50) [默认 1]: ").strip() or "1"
-
-        if pool_choice == "2":
-            selected_universe = NASDAQ_TOP_50_TICKERS
-        else:
-            selected_universe = ["NVDA", "TSLA", "SPCX", "AAPL", "MSFT", "AMZN", "GOOGL", "META"]
-
         run_portfolio_pipeline(
             strategy_code=selected_code,
             lookback_years=years,
             eval_days=eval_days,
-            universe=selected_universe,
+            universe=select_portfolio_universe(),
         )
 
 
@@ -444,11 +443,9 @@ def main():
     # Determine evaluation days from timeframe argument
     eval_days = None
     years = args.years
-    if args.timeframe:
-        tf_cfg = TIMEFRAME_CODE_MAP.get(args.timeframe.lower())
-        if tf_cfg:
-            eval_days = tf_cfg["eval_days"]
-            years = tf_cfg["years"]
+    if args.timeframe and (tf_cfg := TIMEFRAME_CODE_MAP.get(args.timeframe.lower())):
+        eval_days = tf_cfg["eval_days"]
+        years = tf_cfg["years"]
 
     if not args.strategy:
         interactive_menu()
