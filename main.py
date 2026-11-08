@@ -430,8 +430,17 @@ def main():
     parser.add_argument("--nasdaq-top50", action="store_true", help="Use Nasdaq Top 50 universe")
     parser.add_argument("--chart", action="store_true", help="Auto generate charts without prompting")
     parser.add_argument("--no-chart", action="store_true", help="Skip charts without prompting")
+    parser.add_argument("--ui", action="store_true", help="Launch Streamlit Web UI")
 
     args = parser.parse_args()
+
+    if args.ui:
+        import subprocess
+        streamlit_bin = os.path.join(os.path.dirname(sys.executable), "streamlit")
+        cmd = [streamlit_bin if os.path.exists(streamlit_bin) else "streamlit", "run", "app.py"]
+        print(f"🚀 正在启动 Web 控制台: {' '.join(cmd)}")
+        subprocess.run(cmd)
+        return
 
     # Determine auto_chart preference
     auto_chart = None
