@@ -26,7 +26,7 @@ from backtester.universe import NASDAQ_TOP_50_TICKERS, NASDAQ_TOP_50_MAP
 from backtester.trade_diagnosis import diagnose_backtest_trades
 from backtester.chart_ui import (
     build_period_candlestick_chart,
-    build_diagnosis_candlestick_chart,
+    build_diagnosis_candlestick_charts,
 )
 
 # Single stock strategies
@@ -560,8 +560,9 @@ else:
     st.markdown("### 🕯️ 策略触发条件与 K 线图解 (Signal & Condition Visual Diagnosis)")
     with st.container(border=True):
         st.caption("通过 K 线与策略指标线（如均线、RSI 超卖线与200日牛熊过滤线、唐奇安通道、布林带挤压线等）直观展示交易点为何触发或为何被拦截。")
-        diag_k_chart = build_diagnosis_candlestick_chart(result, run_code, is_portfolio=is_portfolio)
-        st.altair_chart(diag_k_chart, width="stretch", alt=f"{run_code} diagnostic candlestick chart")
+        diag_charts = build_diagnosis_candlestick_charts(result, run_code, is_portfolio=is_portfolio)
+        for chart_title, diag_chart in diag_charts:
+            st.altair_chart(diag_chart, width="stretch", alt=chart_title)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
