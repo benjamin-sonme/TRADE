@@ -18,9 +18,15 @@ st.set_page_config(
 
 import importlib
 import backtester.data_loader as _dl_mod
+import backtester.visualizer as _vis_mod
+import backtester.portfolio_visualizer as _pvis_mod
+import backtester.risk_analyzer as _ra_mod
 import backtester.trade_diagnosis as _td_mod
 import backtester.chart_ui as _cu_mod
 importlib.reload(_dl_mod)
+importlib.reload(_vis_mod)
+importlib.reload(_pvis_mod)
+importlib.reload(_ra_mod)
 importlib.reload(_td_mod)
 importlib.reload(_cu_mod)
 
