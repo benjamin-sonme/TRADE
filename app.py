@@ -16,6 +16,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+import importlib
 from backtester.data_loader import DataLoader
 from backtester.engine import BacktestEngine
 from backtester.portfolio_engine import PortfolioEngine
@@ -23,6 +24,10 @@ from backtester.visualizer import Visualizer
 from backtester.portfolio_visualizer import PortfolioVisualizer
 from backtester.risk_analyzer import assess_investment_risk
 from backtester.universe import NASDAQ_TOP_50_TICKERS, NASDAQ_TOP_50_MAP
+import backtester.trade_diagnosis as _td_mod
+import backtester.chart_ui as _cu_mod
+importlib.reload(_td_mod)
+importlib.reload(_cu_mod)
 from backtester.trade_diagnosis import diagnose_backtest_trades
 from backtester.chart_ui import (
     build_period_candlestick_chart,
