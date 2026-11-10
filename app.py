@@ -277,6 +277,23 @@ if "cache_bust" not in st.session_state:
     st.session_state["cache_bust"] = 0
 
 
+def _reset_to_home():
+    """Resets backtest state and all control widgets back to the initial Home view (like a browser refresh)."""
+    st.session_state["last_run"] = None
+    for widget_key in (
+        "strategy_select",
+        "ticker_mode",
+        "top50_select",
+        "custom_ticker",
+        "pool_choice",
+        "timeframe_radio",
+        "cap_input",
+        "slippage_slider",
+        "hero_portfolio_ticker",
+    ):
+        st.session_state.pop(widget_key, None)
+
+
 # ==========================================
 # SIDEBAR CONTROLS
 # ==========================================
@@ -361,13 +378,18 @@ with st.sidebar:
 
     st.markdown("---")
     run_btn = st.button("🚀 运行量化回测", type="primary", width="stretch", key="run_btn")
+    home_sidebar_slot = st.empty()
 
 
 # ==========================================
 # MAIN DASHBOARD AREA
 # ==========================================
-st.title("📈 美股量化交易策略回测与风控系统")
-st.caption("基于严格真实行情 · 无前视偏差 · 充分预热切片 · 投资风险评级模型 (R1~R4) · v2.2")
+col_title, col_home_top = st.columns([4.2, 1], vertical_alignment="center")
+with col_title:
+    st.title("📈 美股量化交易策略回测与风控系统")
+    st.caption("基于严格真实行情 · 无前视偏差 · 充分预热切片 · 投资风险评级模型 (R1~R4) · v2.2")
+with col_home_top:
+    home_top_slot = st.empty()
 
 # --- TOP HERO SECTION: PERIOD CANDLESTICK K-LINE CHART RIGHT BELOW TITLE ---
 with st.container(border=True):
@@ -451,6 +473,20 @@ if run_btn:
             st.error(f"❌ 回测运行发生错误: {str(e)}")
 
 last_run = st.session_state["last_run"]
+
+if last_run is not None:
+    home_sidebar_slot.button(
+        "🏠 返回首页",
+        on_click=_reset_to_home,
+        width="stretch",
+        key="home_sidebar_btn",
+    )
+    home_top_slot.button(
+        "🏠 返回首页",
+        on_click=_reset_to_home,
+        width="stretch",
+        key="home_top_btn",
+    )
 
 if not last_run:
     st.markdown("""
@@ -679,4 +715,14 @@ else:
             file_name=f"backtest_{run_code}_{result.start_date}_{result.end_date}.csv",
             mime="text/csv",
             key="download_csv_btn",
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_hb1, col_hb2, col_hb3 = st.columns([1.5, 1.2, 1.5])
+    with col_hb2:
+        st.button(
+            "🏠 返回首页（回到初始界面）",
+            on_click=_reset_to_home,
+            width="stretch",
+            key="home_bottom_btn",
         )
