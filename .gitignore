@@ -25,3 +25,7 @@ Thumbs.db
 
 # Matplotlib cache
 .matplotlib/
+
+# Generated report charts (keep default example chart)
+reports/*.png
+!reports/NVDA_DualMA_SMA_20_50_2023-10-24_2026-10-22.png
