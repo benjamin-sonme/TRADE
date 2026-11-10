@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Streamlit Web UI for U.S. Equity Trading Strategy Backtesting System (v2.1)
+Streamlit Web UI for U.S. Equity Trading Strategy Backtesting System (v2.2)
 美股量化交易与资产配置回测系统 - 交互式可视化控制台
 """
 
@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="美股量化交易策略回测系统 v2.1",
+    page_title="美股量化交易策略回测系统 v2.2",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -23,6 +23,11 @@ from backtester.visualizer import Visualizer
 from backtester.portfolio_visualizer import PortfolioVisualizer
 from backtester.risk_analyzer import assess_investment_risk
 from backtester.universe import NASDAQ_TOP_50_TICKERS, NASDAQ_TOP_50_MAP
+from backtester.trade_diagnosis import diagnose_backtest_trades
+from backtester.chart_ui import (
+    build_period_candlestick_chart,
+    build_diagnosis_candlestick_chart,
+)
 
 # Single stock strategies
 from backtester.strategies.ma_crossover import DualMACrossoverStrategy
@@ -116,6 +121,18 @@ TIMEFRAME_OPTIONS = {
 }
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def load_period_ohlcv(ticker: str, years: int, eval_days: int) -> pd.DataFrame:
+    """Loads OHLCV market data for the chosen ticker and slices it to the selected period."""
+    clean_t = ticker.strip().upper()
+    if clean_t in {"SPACEX", "SPACE-X", "SPACE_X"}:
+        clean_t = "SPCX"
+    df = DataLoader().load_data(ticker=clean_t, lookback_years=years)
+    if eval_days and 0 < eval_days < len(df):
+        return df.iloc[-eval_days:].copy()
+    return df
+
+
 def execute_backtest(
     selected_code: str,
     target_ticker: str,
@@ -124,11 +141,11 @@ def execute_backtest(
     eval_days: int,
     initial_capital: float,
     slippage_bps: float,
-    render_chart: bool = False,
-) -> Tuple[Any, Dict[str, Any], str | None, bool]:
+) -> Tuple[Any, Dict[str, Any], bytes, bool]:
     """
     Runs the selected strategy backtest and returns:
-    (result, risk_profile, chart_path, is_portfolio)
+    (result, risk_profile, report_png_bytes, is_portfolio)
+    Note: Renders high-res chart bytes directly in memory for instant web display without writing to disk!
     """
     loader = DataLoader()
     strat_meta = STRATEGY_DETAILS[selected_code]
@@ -173,8 +190,8 @@ def execute_backtest(
         engine = BacktestEngine(initial_capital=initial_capital, slippage_bps=slippage_bps)
         result = engine.run(df=df, strategy=strategy, ticker=ticker, eval_days=eval_days)
         risk_profile = assess_investment_risk(result.metrics, ticker=ticker)
-        chart_path = Visualizer.plot_result(result) if render_chart else None
-        return result, risk_profile, chart_path, False
+        png_bytes = Visualizer.render_png_bytes(result)
+        return result, risk_profile, png_bytes, False
 
     else:
         p_engine = PortfolioEngine(initial_capital=initial_capital, slippage_bps=slippage_bps)
@@ -235,8 +252,8 @@ def execute_backtest(
             raise ValueError(f"Unsupported portfolio strategy: {selected_code}")
 
         risk_profile = assess_investment_risk(result.metrics, ticker=result.strategy_name)
-        chart_path = PortfolioVisualizer.plot_result(result) if render_chart else None
-        return result, risk_profile, chart_path, True
+        png_bytes = PortfolioVisualizer.render_png_bytes(result)
+        return result, risk_profile, png_bytes, True
 
 
 # Initialize session state
@@ -334,12 +351,40 @@ with st.sidebar:
 # MAIN DASHBOARD AREA
 # ==========================================
 st.title("📈 美股量化交易策略回测与风控系统")
-st.caption("基于严格真实行情 · 无前视偏差 · 充分预热切片 · 投资风险评级模型 (R1~R4) · v2.1")
+st.caption("基于严格真实行情 · 无前视偏差 · 充分预热切片 · 投资风险评级模型 (R1~R4) · v2.2")
 
+# --- TOP HERO SECTION: PERIOD CANDLESTICK K-LINE CHART RIGHT BELOW TITLE ---
+with st.container(border=True):
+    if strat_meta["type"] == "single":
+        hero_ticker = target_ticker
+    else:
+        col_h1, col_h2 = st.columns([2, 1])
+        with col_h1:
+            st.markdown("#### 🕯️ 标的区间 K 线行情预览 (Period Candlestick Chart)")
+        with col_h2:
+            hero_ticker = st.selectbox(
+                "选择K线预览成分股",
+                selected_universe,
+                index=0,
+                label_visibility="collapsed",
+                key="hero_portfolio_ticker",
+            )
+    if strat_meta["type"] == "single":
+        st.markdown(f"#### 🕯️ **{hero_ticker}** 区间 K 线行情预览 (Period: {tf_name})")
+
+    try:
+        hero_ohlcv = load_period_ohlcv(hero_ticker, years=years, eval_days=eval_days)
+        hero_k_chart = build_period_candlestick_chart(hero_ohlcv, ticker=hero_ticker, period_label=tf_name)
+        st.altair_chart(hero_k_chart, width="stretch", alt=f"{hero_ticker} period candlestick chart")
+    except Exception as e:
+        st.warning(f"⚠️ 无法加载 {hero_ticker} 的 K 线预览行情：{e}")
+
+
+# Execute Backtest when button clicked
 if run_btn:
     with st.spinner("⏳ 正在载入真实行情数据并执行量化仿真，请稍候..."):
         try:
-            result, risk_profile, chart_path, is_portfolio = execute_backtest(
+            result, risk_profile, png_bytes, is_portfolio = execute_backtest(
                 selected_code=selected_code,
                 target_ticker=target_ticker,
                 selected_universe=selected_universe,
@@ -347,14 +392,16 @@ if run_btn:
                 eval_days=eval_days,
                 initial_capital=initial_capital,
                 slippage_bps=slippage_bps,
-                render_chart=False,
             )
+            diagnosis = diagnose_backtest_trades(result, selected_code, is_portfolio=is_portfolio)
             st.session_state["last_run"] = {
                 "selected_code": selected_code,
                 "result": result,
                 "risk_profile": risk_profile,
-                "chart_path": None,
+                "png_bytes": png_bytes,
+                "saved_local_path": None,
                 "is_portfolio": is_portfolio,
+                "diagnosis": diagnosis,
             }
         except Exception as e:
             st.error(f"❌ 回测运行发生错误: {str(e)}")
@@ -364,13 +411,13 @@ last_run = st.session_state["last_run"]
 if not last_run:
     st.markdown("""
     ### 👋 欢迎使用量化回测控制台！
-    本系统集成了经典趋势跟踪、均值回归、动量轮动与基本面多因子等 **9 大流派量化策略**。
+    上方为您已选定标的与时间周期的**实时日 K 线与成交量视图**。
 
     #### 💡 快速上手步骤：
-    1. 在**左侧控制台**挑选您想要检验的交易策略（严格按 S01~S09 排序）；
-    2. 选择目标股票（内置**纳斯达克市值前 50 强标的**，包含已上市的 SpaceX `SPCX`、特斯拉 `TSLA`、英伟达 `NVDA` 等）；
-    3. 选择回测时间档位（涵盖 **3天、1周、1个月、半年、1年、3年、5年**）；
-    4. 点击左下角的 **【🚀 运行量化回测】**，即刻生成多维度绩效对比、**企业投资风险评级卡 (R1~R4)**！
+    1. 在**左侧控制台**挑选您想要检验的交易策略（按 S01~S09 排序）；
+    2. 选择目标股票（内置**纳斯达克市值前 50 强标的**，含 SpaceX `SPCX`、特斯拉 `TSLA`、英伟达 `NVDA` 等）；
+    3. 选择回测时间档位（支持 **3天、1周、1个月、半年、1年、3年、5年**）；
+    4. 点击左下角 **【🚀 运行量化回测】**，即可查看**风险评级卡**、**交易触发原因诊断**、**K 线信号图解**与**收益报表**！
     """)
 
     with st.expander("🔍 展开查看纳斯达克市值前 50 强标的速查表 (Top 50 Companies)"):
@@ -384,6 +431,8 @@ else:
     risk_profile = last_run["risk_profile"]
     is_portfolio = last_run["is_portfolio"]
     run_code = last_run["selected_code"]
+    diagnosis = last_run["diagnosis"]
+    png_bytes = last_run["png_bytes"]
 
     # --- SECTION 1: INVESTMENT RISK ASSESSMENT CARD ---
     st.markdown("### 🛡️ 投资风险评级与初学者风控指南 (Risk Assessment Card)")
@@ -490,36 +539,74 @@ else:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # --- SECTION 3: INTERACTIVE CHART GENERATION CONSENT ---
-    st.markdown("### 📈 高清可视化图表 (Visual Performance Report)")
-    chart_path = last_run.get("chart_path")
+    # --- SECTION 3: DEDICATED TRADE EXECUTION DIAGNOSIS ---
+    st.markdown("### 🔎 交易次数诊断与逻辑拆解 (Trade Execution Diagnosis)")
+    with st.container(border=True):
+        st.markdown(f"#### {diagnosis['headline']}")
+        for bullet in diagnosis["bullets"]:
+            st.markdown(f"- {bullet}")
 
-    if chart_path is None:
-        with st.container(border=True):
-            st.info("🙋 **图表生成前确认**：本策略的数据回测与风险评级已完成。是否同意渲染并保存高清可视化分析图表至 `reports/` 目录？", icon="📊")
-            col_c1, col_c2 = st.columns([1, 4])
-            with col_c1:
-                if st.button("🎨 同意并生成分析图表", type="primary", key="gen_chart_btn"):
-                    with st.spinner("🎨 正在渲染高清图表，请稍候..."):
-                        if is_portfolio:
-                            saved_path = PortfolioVisualizer.plot_result(result)
-                        else:
-                            saved_path = Visualizer.plot_result(result)
-                        st.session_state["last_run"]["chart_path"] = saved_path
-                        st.rerun()
-    else:
-        if os.path.exists(chart_path):
-            st.success(f"✅ 图表已生成并保存至：`{chart_path}`")
-            st.image(
-                chart_path,
-                caption=f"策略回测报表: {result.strategy_name} ({result.start_date} 至 {result.end_date})",
-                alt=f"{result.strategy_name} performance report chart",
+        if diagnosis["condition_rows"]:
+            st.markdown("**📌 策略条件触发情况统计明细：**")
+            st.table(pd.DataFrame(diagnosis["condition_rows"]), width="stretch")
+
+        if not diagnosis["events_df"].empty:
+            with st.expander(f"📑 点击展开详细交易 / 调仓触发流水记录（共 {len(diagnosis['events_df'])} 条）"):
+                st.dataframe(diagnosis["events_df"], width="stretch")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # --- SECTION 4: DIAGNOSTIC K-LINE & INDICATOR TRIGGER CHART ---
+    st.markdown("### 🕯️ 策略触发条件与 K 线图解 (Signal & Condition Visual Diagnosis)")
+    with st.container(border=True):
+        st.caption("通过 K 线与策略指标线（如均线、RSI 超卖线与200日牛熊过滤线、唐奇安通道、布林带挤压线等）直观展示交易点为何触发或为何被拦截。")
+        diag_k_chart = build_diagnosis_candlestick_chart(result, run_code, is_portfolio=is_portfolio)
+        st.altair_chart(diag_k_chart, width="stretch", alt=f"{run_code} diagnostic candlestick chart")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # --- SECTION 5: WEB REPORT VISUALIZATION FIRST -> THEN ASK DOWNLOAD / SAVE ---
+    st.markdown("### 📈 全景回测分析报告图表 (Performance Report)")
+    st.image(
+        png_bytes,
+        caption=f"策略回测全景报表: {result.strategy_name} ({result.start_date} 至 {result.end_date})",
+        alt=f"{result.strategy_name} performance report chart",
+        width="stretch",
+    )
+
+    with st.container(border=True):
+        st.info(
+            "🙋 **图表已在网页为您即时生成展示。** 请确认是否需要将该高清分析图表下载到您的电脑本地，或保存到项目的 `reports/` 文件夹？",
+            icon="💾",
+        )
+        col_dl1, col_dl2, col_dl3 = st.columns([1.4, 1.4, 2])
+        clean_name = result.strategy_name.replace(" ", "_")
+        target_label = getattr(result, "ticker", clean_name)
+        default_png_name = f"{target_label}_{clean_name}_{result.start_date}_{result.end_date}.png"
+
+        with col_dl1:
+            st.download_button(
+                label="📥 下载高清图表到本地电脑 (.png)",
+                data=png_bytes,
+                file_name=default_png_name,
+                mime="image/png",
                 width="stretch",
+                key="download_png_btn",
             )
-        else:
-            st.warning("⚠️ 图表生成失败或文件不存在。")
+        with col_dl2:
+            if st.button("📂 保存一份到项目 reports/ 目录", width="stretch", key="save_reports_btn"):
+                reports_dir = os.path.join(os.path.dirname(__file__), "reports")
+                os.makedirs(reports_dir, exist_ok=True)
+                save_file = os.path.join(reports_dir, default_png_name)
+                with open(save_file, "wb") as f:
+                    f.write(png_bytes)
+                st.session_state["last_run"]["saved_local_path"] = save_file
+                st.rerun()
 
-    # --- SECTION 4: DATA TABLE & DOWNLOAD ---
+        if last_run.get("saved_local_path"):
+            st.success(f"✅ 已保存至项目目录：`{last_run['saved_local_path']}`")
+
+    # --- SECTION 6: DATA TABLE & CSV EXPORT ---
     with st.expander("📋 查看完整回测对比明细与导出 CSV 数据"):
         strat_hdr = f"策略 ({result.strategy_name})"
         bench_hdr = f"基准 ({getattr(result, 'benchmark_name', 'Buy & Hold')})"
@@ -534,7 +621,7 @@ else:
             {"指标 / Metric": "历史最大回撤 (Max Drawdown)", strat_hdr: f"{m['Strategy Max Drawdown']*100:.2f}%", bench_hdr: f"{m['Benchmark Max Drawdown']*100:.2f}%"},
         ]
 
-        st.table(pd.DataFrame(table_rows))
+        st.table(pd.DataFrame(table_rows), width="stretch")
 
         csv_data = result.equity_df.to_csv().encode("utf-8")
         st.download_button(

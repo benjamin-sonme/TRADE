@@ -4,6 +4,7 @@ Generates high-resolution performance charts comparing Strategy vs Buy & Hold Be
 including Equity Curves, Price Action with Trade Markers, and Underwater Drawdowns.
 """
 
+import io
 import os
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -22,9 +23,9 @@ class Visualizer:
     """Creates clear comparative charts for backtesting results."""
 
     @staticmethod
-    def plot_result(result: BacktestResult, save_path: str = None) -> str:
+    def build_figure(result: BacktestResult):
         """
-        Plots a 3-panel chart:
+        Builds a 3-panel matplotlib figure:
         1. Equity Curve: Strategy vs Buy & Hold
         2. Price Chart with Indicator & Trade Entry/Exit Markers
         3. Underwater Drawdown Curve
@@ -140,20 +141,38 @@ class Visualizer:
         ax_dd.plot(data.index, bench_dd, label=f"Benchmark DD (Max: {metrics['Benchmark Max Drawdown']*100:.1f}%)", color="#64748B", linewidth=1.0, linestyle=":")
         ax_dd.fill_between(data.index, strat_dd, 0, color="#F43F5E", alpha=0.25)
         ax_dd.set_ylabel("Drawdown (%)", color="#F8FAFC", fontsize=11)
+        ax_dd.set_xlabel("Trading Date", color="#F8FAFC", fontsize=11)
         ax_dd.legend(loc="lower left", facecolor="#1E293B", edgecolor="#334155", labelcolor="#F8FAFC")
 
-        # Formatting x-axis dates
-        ax_dd.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+        # Formatting x-axis dates accurately for short and long windows
+        date_fmt = "%Y-%m-%d" if len(data) <= 90 else "%Y-%m"
+        ax_dd.xaxis.set_major_formatter(mdates.DateFormatter(date_fmt))
         fig.autofmt_xdate()
 
         plt.tight_layout()
+        return fig
+
+    @staticmethod
+    def plot_result(result: BacktestResult, save_path: str = None) -> str:
+        """Saves the 3-panel report chart to disk and returns the saved file path."""
+        fig = Visualizer.build_figure(result)
 
         if save_path is None:
             clean_strat = result.strategy_name.replace(" ", "_")
             save_path = os.path.join(REPORTS_DIR, f"{result.ticker}_{clean_strat}_{result.start_date}_{result.end_date}.png")
 
-        plt.savefig(save_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
+        fig.savefig(save_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close(fig)
 
         print(f"[Visualizer] Report chart saved to: {save_path}")
         return save_path
+
+    @staticmethod
+    def render_png_bytes(result: BacktestResult) -> bytes:
+        """Renders the 3-panel report chart into in-memory PNG bytes without touching disk."""
+        fig = Visualizer.build_figure(result)
+        buf = io.BytesIO()
+        fig.savefig(buf, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close(fig)
+        buf.seek(0)
+        return buf.getvalue()

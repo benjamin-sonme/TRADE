@@ -45,6 +45,7 @@ class DataLoader:
 
         cache_path = self.get_cache_path(ticker, start_date, end_date)
 
+        fallback_df = None
         if not force_refresh:
             # 1. Check exact cache match
             if os.path.exists(cache_path):
@@ -55,15 +56,19 @@ class DataLoader:
                 except Exception as e:
                     print(f"[DataLoader] Failed to read exact cache ({e}), checking alternatives...")
 
-            # 2. Check if any cache exists for this ticker (useful for recently IPO'd stocks)
+            # 2. Check if another cache exists that already covers the requested start_date
             prefix = f"{ticker}_"
-            for fname in os.listdir(self.cache_dir):
+            req_start_ts = pd.Timestamp(start_date)
+            for fname in sorted(os.listdir(self.cache_dir)):
                 if fname.startswith(prefix) and fname.endswith(".csv"):
                     try:
                         df = pd.read_csv(os.path.join(self.cache_dir, fname), index_col=0, parse_dates=True)
                         if len(df) > 0:
-                            print(f"[DataLoader] Found existing local cache '{fname}' ({len(df)} bars) for {ticker}. Using cached data.")
-                            return df
+                            if df.index.min() <= req_start_ts + pd.Timedelta(days=20):
+                                print(f"[DataLoader] Found sufficient local cache '{fname}' ({len(df)} bars) for {ticker}. Using cached data.")
+                                return df
+                            if fallback_df is None or len(df) > len(fallback_df):
+                                fallback_df = df
                     except Exception:
                         pass
 
@@ -71,12 +76,18 @@ class DataLoader:
         try:
             df = yf.download(ticker, start=start_date, end=end_date, progress=False, auto_adjust=True)
         except Exception as e:
+            if fallback_df is not None:
+                print(f"[DataLoader] Download failed ({e}), falling back to cached data ({len(fallback_df)} bars) for {ticker}.")
+                return fallback_df
             raise RuntimeError(
                 f"Failed to download data for '{ticker}' via yfinance: {e}\n"
                 f"Tip: Check ticker spelling, network connection, or run with network permission."
             )
 
         if df is None or df.empty:
+            if fallback_df is not None:
+                print(f"[DataLoader] Empty download, falling back to cached data ({len(fallback_df)} bars) for {ticker}.")
+                return fallback_df
             raise ValueError(
                 f"No data returned for ticker '{ticker}' between {start_date} and {end_date}. "
                 f"Please verify if the symbol is correct and public on US exchanges."

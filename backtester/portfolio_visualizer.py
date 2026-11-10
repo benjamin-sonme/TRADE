@@ -4,6 +4,7 @@ Plots multi-asset strategy equity curve, dynamic allocation stacked area chart,
 and underwater drawdown comparisons.
 """
 
+import io
 import os
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -23,7 +24,8 @@ class PortfolioVisualizer:
     """Visualizes multi-asset portfolio backtests."""
 
     @staticmethod
-    def plot_result(result: PortfolioBacktestResult, save_path: str = None) -> str:
+    def build_figure(result: PortfolioBacktestResult):
+        """Builds a 3-panel matplotlib figure for portfolio backtest results."""
         data = result.equity_df
         metrics = result.metrics
         weights = result.weights_history
@@ -105,19 +107,37 @@ class PortfolioVisualizer:
         ax_dd.plot(data.index, bench_dd, label=f"Benchmark DD (Max: {metrics['Benchmark Max Drawdown']*100:.1f}%)", color="#64748B", linewidth=1.0, linestyle=":")
         ax_dd.fill_between(data.index, strat_dd, 0, color="#F43F5E", alpha=0.25)
         ax_dd.set_ylabel("Drawdown (%)", color="#F8FAFC", fontsize=11)
+        ax_dd.set_xlabel("Trading Date", color="#F8FAFC", fontsize=11)
         ax_dd.legend(loc="lower left", facecolor="#1E293B", edgecolor="#334155", labelcolor="#F8FAFC")
 
-        ax_dd.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+        date_fmt = "%Y-%m-%d" if len(data) <= 90 else "%Y-%m"
+        ax_dd.xaxis.set_major_formatter(mdates.DateFormatter(date_fmt))
         fig.autofmt_xdate()
 
         plt.tight_layout()
+        return fig
+
+    @staticmethod
+    def plot_result(result: PortfolioBacktestResult, save_path: str = None) -> str:
+        """Saves portfolio chart to disk and returns the saved file path."""
+        fig = PortfolioVisualizer.build_figure(result)
 
         if save_path is None:
             clean_strat = result.strategy_name.replace(" ", "_")
             save_path = os.path.join(REPORTS_DIR, f"{clean_strat}_{result.start_date}_{result.end_date}.png")
 
-        plt.savefig(save_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
+        fig.savefig(save_path, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close(fig)
 
         print(f"[PortfolioVisualizer] Report chart saved to: {save_path}")
         return save_path
+
+    @staticmethod
+    def render_png_bytes(result: PortfolioBacktestResult) -> bytes:
+        """Renders portfolio chart into in-memory PNG bytes without saving to disk."""
+        fig = PortfolioVisualizer.build_figure(result)
+        buf = io.BytesIO()
+        fig.savefig(buf, dpi=200, bbox_inches="tight", facecolor=fig.get_facecolor())
+        plt.close(fig)
+        buf.seek(0)
+        return buf.getvalue()
