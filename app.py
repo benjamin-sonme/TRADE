@@ -17,6 +17,13 @@ st.set_page_config(
 )
 
 import importlib
+import backtester.data_loader as _dl_mod
+import backtester.trade_diagnosis as _td_mod
+import backtester.chart_ui as _cu_mod
+importlib.reload(_dl_mod)
+importlib.reload(_td_mod)
+importlib.reload(_cu_mod)
+
 from backtester.data_loader import DataLoader
 from backtester.engine import BacktestEngine
 from backtester.portfolio_engine import PortfolioEngine
@@ -24,10 +31,6 @@ from backtester.visualizer import Visualizer
 from backtester.portfolio_visualizer import PortfolioVisualizer
 from backtester.risk_analyzer import assess_investment_risk
 from backtester.universe import NASDAQ_TOP_50_TICKERS, NASDAQ_TOP_50_MAP
-import backtester.trade_diagnosis as _td_mod
-import backtester.chart_ui as _cu_mod
-importlib.reload(_td_mod)
-importlib.reload(_cu_mod)
 from backtester.trade_diagnosis import diagnose_backtest_trades
 from backtester.chart_ui import (
     build_period_candlestick_chart,
@@ -126,13 +129,13 @@ TIMEFRAME_OPTIONS = {
 }
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def load_period_ohlcv(ticker: str, years: int, eval_days: int) -> pd.DataFrame:
-    """Loads OHLCV market data for the chosen ticker and slices it to the selected period."""
+@st.cache_data(ttl=120, show_spinner=False)
+def load_period_ohlcv(ticker: str, years: int, eval_days: int, cache_bust: int = 0) -> pd.DataFrame:
+    """Loads latest OHLCV market data for the chosen ticker and slices it to the selected period."""
     clean_t = ticker.strip().upper()
     if clean_t in {"SPACEX", "SPACE-X", "SPACE_X"}:
         clean_t = "SPCX"
-    df = DataLoader().load_data(ticker=clean_t, lookback_years=years)
+    df = DataLoader().load_data(ticker=clean_t, lookback_years=years, force_refresh=(cache_bust > 0))
     if eval_days and 0 < eval_days < len(df):
         return df.iloc[-eval_days:].copy()
     return df
@@ -264,6 +267,8 @@ def execute_backtest(
 # Initialize session state
 if "last_run" not in st.session_state:
     st.session_state["last_run"] = None
+if "cache_bust" not in st.session_state:
+    st.session_state["cache_bust"] = 0
 
 
 # ==========================================
@@ -361,9 +366,17 @@ st.caption("基于严格真实行情 · 无前视偏差 · 充分预热切片 ·
 # --- TOP HERO SECTION: PERIOD CANDLESTICK K-LINE CHART RIGHT BELOW TITLE ---
 with st.container(border=True):
     if strat_meta["type"] == "single":
-        hero_ticker = target_ticker
+        col_h1, col_h3 = st.columns([3.5, 1])
+        with col_h1:
+            hero_ticker = target_ticker
+            st.markdown(f"#### 🕯️ **{hero_ticker}** 区间 K 线行情预览 ({tf_name})")
+        with col_h3:
+            if st.button("🔄 同步最新实时行情", width="stretch", key="sync_live_btn"):
+                st.session_state["cache_bust"] += 1
+                st.cache_data.clear()
+                st.rerun()
     else:
-        col_h1, col_h2 = st.columns([2, 1])
+        col_h1, col_h2, col_h3 = st.columns([2.2, 1, 1])
         with col_h1:
             st.markdown("#### 🕯️ 标的区间 K 线行情预览 (Period Candlestick Chart)")
         with col_h2:
@@ -374,13 +387,33 @@ with st.container(border=True):
                 label_visibility="collapsed",
                 key="hero_portfolio_ticker",
             )
-    if strat_meta["type"] == "single":
-        st.markdown(f"#### 🕯️ **{hero_ticker}** 区间 K 线行情预览 (Period: {tf_name})")
+        with col_h3:
+            if st.button("🔄 同步最新实时行情", width="stretch", key="sync_live_btn"):
+                st.session_state["cache_bust"] += 1
+                st.cache_data.clear()
+                st.rerun()
 
     try:
-        hero_ohlcv = load_period_ohlcv(hero_ticker, years=years, eval_days=eval_days)
-        hero_k_chart = build_period_candlestick_chart(hero_ohlcv, ticker=hero_ticker, period_label=tf_name)
-        st.altair_chart(hero_k_chart, width="stretch", alt=f"{hero_ticker} period candlestick chart")
+        hero_ohlcv = load_period_ohlcv(
+            hero_ticker,
+            years=years,
+            eval_days=eval_days,
+            cache_bust=st.session_state["cache_bust"],
+        )
+        latest_dt = hero_ohlcv.index[-1].strftime("%Y-%m-%d")
+        latest_px = float(hero_ohlcv["Close"].iloc[-1])
+        prev_px = float(hero_ohlcv["Close"].iloc[-2]) if len(hero_ohlcv) >= 2 else latest_px
+        day_chg = ((latest_px - prev_px) / prev_px * 100.0) if prev_px > 0 else 0.0
+        st.caption(
+            f"🕒 最新交易日：**{latest_dt}** ｜ 最新价/收盘价：**${latest_px:.2f}** ({day_chg:+.2f}%) "
+            f"｜ 💡 触控板双指张开/捏合可缩放 K 线，放大后可拖拽底部滑块条左右滑动，右上角可全屏展开"
+        )
+        hero_opt, hero_h, hero_alt = build_period_candlestick_chart(
+            hero_ohlcv,
+            ticker=hero_ticker,
+            period_label=tf_name,
+        )
+        st.echarts_chart(hero_opt, width="stretch", height=hero_h, alt=hero_alt, key="hero_kline_chart")
     except Exception as e:
         st.warning(f"⚠️ 无法加载 {hero_ticker} 的 K 线预览行情：{e}")
 
@@ -564,10 +597,14 @@ else:
     # --- SECTION 4: DIAGNOSTIC K-LINE & INDICATOR TRIGGER CHART ---
     st.markdown("### 🕯️ 策略触发条件与 K 线图解 (Signal & Condition Visual Diagnosis)")
     with st.container(border=True):
-        st.caption("通过 K 线与策略指标线（如均线、RSI 超卖线与200日牛熊过滤线、唐奇安通道、布林带挤压线等）直观展示交易点为何触发或为何被拦截。")
+        st.caption(
+            "通过 K 线与策略指标线（如均线、RSI 超卖线与200日牛熊过滤线、唐奇安通道、布林带挤压线等）直观展示交易点为何触发或为何被拦截。"
+            "支持双指触控板缩放及下方滑块条左右拖动查看细节，点击右上角可全屏展开。"
+        )
         diag_charts = build_diagnosis_candlestick_charts(result, run_code, is_portfolio=is_portfolio)
-        for chart_title, diag_chart in diag_charts:
-            st.altair_chart(diag_chart, width="stretch", alt=chart_title)
+        for idx, (chart_title, diag_opt, diag_h, diag_alt) in enumerate(diag_charts):
+            st.markdown(f"**{chart_title}**")
+            st.echarts_chart(diag_opt, width="stretch", height=diag_h, alt=diag_alt, key=f"diag_echarts_{idx}")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
