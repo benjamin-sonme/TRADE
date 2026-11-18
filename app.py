@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Streamlit Web UI for U.S. Equity Trading Strategy Backtesting System (v2.2)
-美股量化交易与资产配置回测系统 - 交互式可视化控制台
+Streamlit Web UI for U.S. Equity Trading Strategy Backtesting System (v2.3)
+美股量化交易与资产配置回测系统 - 交互式可视化控制台 + 下一交易日信号预览 (Next-Day Signal Preview)
 """
 
 import os
@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="美股量化交易策略回测系统 v2.2",
+    page_title="美股量化交易策略回测与信号预览系统 v2.3",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -23,12 +23,28 @@ import backtester.portfolio_visualizer as _pvis_mod
 import backtester.risk_analyzer as _ra_mod
 import backtester.trade_diagnosis as _td_mod
 import backtester.chart_ui as _cu_mod
+import backtester.forward_signal.models as _fs_models_mod
+import backtester.forward_signal.scenario_engine as _fs_scen_mod
+import backtester.forward_signal.threshold_solver as _fs_thresh_mod
+import backtester.forward_signal.portfolio_solver as _fs_port_mod
+import backtester.forward_signal.risk_validator as _fs_risk_mod
+import backtester.forward_signal.analysis_tools as _fs_tools_mod
+import backtester.forward_signal as _fs_pkg_mod
+import backtester.forward_signal_ui as _fs_ui_mod
 importlib.reload(_dl_mod)
 importlib.reload(_vis_mod)
 importlib.reload(_pvis_mod)
 importlib.reload(_ra_mod)
 importlib.reload(_td_mod)
 importlib.reload(_cu_mod)
+importlib.reload(_fs_models_mod)
+importlib.reload(_fs_scen_mod)
+importlib.reload(_fs_thresh_mod)
+importlib.reload(_fs_port_mod)
+importlib.reload(_fs_risk_mod)
+importlib.reload(_fs_tools_mod)
+importlib.reload(_fs_pkg_mod)
+importlib.reload(_fs_ui_mod)
 
 from backtester.data_loader import DataLoader
 from backtester.engine import BacktestEngine
@@ -42,19 +58,16 @@ from backtester.chart_ui import (
     build_period_candlestick_chart,
     build_diagnosis_candlestick_charts,
 )
-
-# Single stock strategies
-from backtester.strategies.ma_crossover import DualMACrossoverStrategy
-from backtester.strategies.rsi_strategy import RSIStrategy
-from backtester.strategies.donchian_breakout import DonchianBreakoutStrategy
-from backtester.strategies.bollinger_squeeze import BollingerBandSqueezeStrategy
-from backtester.strategies.trend_pullback import TrendPullbackStrategy
-
-# Portfolio / Multi-asset strategies
-from backtester.strategies.relative_momentum import RelativeMomentumRotation
-from backtester.strategies.threshold_rebalancing import ThresholdRebalancing
-from backtester.strategies.quality_value_factor import QualityValueFactorStrategy, DEFAULT_FACTOR_UNIVERSE
-from backtester.strategies.dual_momentum import DualMomentumStrategy
+from backtester.forward_signal import (
+    analyze_next_day_signal,
+    create_portfolio_strategy,
+    create_single_stock_strategy,
+)
+from backtester.forward_signal_ui import (
+    render_compact_signal_banner,
+    render_next_day_signal_dashboard,
+)
+from backtester.strategies.quality_value_factor import DEFAULT_FACTOR_UNIVERSE
 
 
 # Ordered strictly from S01 to S09
@@ -135,13 +148,30 @@ TIMEFRAME_OPTIONS = {
 }
 
 
+def _normalize_ticker(ticker: str) -> str:
+    clean_t = ticker.strip().upper()
+    if clean_t in {"SPACEX", "SPACE-X", "SPACE_X"}:
+        return "SPCX"
+    return clean_t
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def load_full_single_ohlcv(ticker: str, years: int, cache_bust: int = 0) -> pd.DataFrame:
+    """Loads full historical OHLCV data for a single ticker (shared by backtest and forward signal preview)."""
+    clean_t = _normalize_ticker(ticker)
+    return DataLoader().load_data(ticker=clean_t, lookback_years=years, force_refresh=(cache_bust > 0))
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def load_full_multi_prices(tickers: Tuple[str, ...], years: int, cache_bust: int = 0) -> pd.DataFrame:
+    """Loads aligned multi-asset Close prices (shared by portfolio backtest and forward signal preview)."""
+    return DataLoader().load_multi_data(list(tickers), lookback_years=years, force_refresh=(cache_bust > 0))
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def load_period_ohlcv(ticker: str, years: int, eval_days: int, cache_bust: int = 0) -> pd.DataFrame:
     """Loads latest OHLCV market data for the chosen ticker and slices it to the selected period."""
-    clean_t = ticker.strip().upper()
-    if clean_t in {"SPACEX", "SPACE-X", "SPACE_X"}:
-        clean_t = "SPCX"
-    df = DataLoader().load_data(ticker=clean_t, lookback_years=years, force_refresh=(cache_bust > 0))
+    df = load_full_single_ohlcv(ticker=ticker, years=years, cache_bust=cache_bust)
     if eval_days and 0 < eval_days < len(df):
         return df.iloc[-eval_days:].copy()
     return df
@@ -159,47 +189,15 @@ def execute_backtest(
     """
     Runs the selected strategy backtest and returns:
     (result, risk_profile, report_png_bytes, is_portfolio)
-    Note: Renders high-res chart bytes directly in memory for instant web display without writing to disk!
+    Uses the exact same canonical strategy factories as Next-Day Signal Preview.
     """
     loader = DataLoader()
     strat_meta = STRATEGY_DETAILS[selected_code]
 
     if strat_meta["type"] == "single":
-        ticker = target_ticker.strip().upper()
-        if ticker in {"SPACEX", "SPACE-X", "SPACE_X"}:
-            ticker = "SPCX"
-
+        ticker = _normalize_ticker(target_ticker)
         df = loader.load_data(ticker=ticker, lookback_years=years)
-
-        if selected_code == "S01":
-            strategy = DualMACrossoverStrategy(short_window=20, long_window=50)
-        elif selected_code == "S02":
-            strategy = RSIStrategy(
-                period=14,
-                oversold=30.0,
-                overbought=70.0,
-                use_trend_filter=True,
-                trend_ma_period=200,
-            )
-        elif selected_code == "S03":
-            strategy = DonchianBreakoutStrategy(entry_window=20, exit_window=10)
-        elif selected_code == "S05":
-            strategy = BollingerBandSqueezeStrategy(
-                period=20,
-                std_dev=2.0,
-                squeeze_lookback=126,
-                squeeze_percentile=10.0,
-                squeeze_recent_window=5,
-            )
-        elif selected_code == "S06":
-            strategy = TrendPullbackStrategy(
-                sma_fast=20,
-                sma_mid=50,
-                sma_slow=200,
-                pullback_window=5,
-            )
-        else:
-            strategy = DualMACrossoverStrategy(short_window=20, long_window=50)
+        strategy = create_single_stock_strategy(selected_code)
 
         engine = BacktestEngine(initial_capital=initial_capital, slippage_bps=slippage_bps)
         result = engine.run(df=df, strategy=strategy, ticker=ticker, eval_days=eval_days)
@@ -212,7 +210,7 @@ def execute_backtest(
 
         if selected_code == "S09":
             prices_df = loader.load_multi_data(["SPY", "VEU", "BIL"], lookback_years=years)
-            dm = DualMomentumStrategy()
+            dm = create_portfolio_strategy("S09", ["SPY", "VEU", "BIL"])
             weights_df = dm.compute_target_weights(prices_df)
             result = p_engine.run(
                 prices_df=prices_df,
@@ -224,7 +222,7 @@ def execute_backtest(
             )
         elif selected_code == "S04":
             prices_df = loader.load_multi_data(selected_universe, lookback_years=years)
-            rm = RelativeMomentumRotation(top_n=4, target_weight_per_stock=0.20)
+            rm = create_portfolio_strategy("S04", selected_universe)
             weights_df = rm.compute_target_weights(prices_df)
             norm_prices = prices_df.divide(prices_df.iloc[0])
             benchmark_series = norm_prices.mean(axis=1) * prices_df.iloc[0].mean()
@@ -238,9 +236,7 @@ def execute_backtest(
             )
         elif selected_code == "S07":
             prices_df = loader.load_multi_data(selected_universe, lookback_years=years)
-            tw_per_stock = 0.80 / len(selected_universe)
-            target_weights = {asset: tw_per_stock for asset in selected_universe}
-            tr = ThresholdRebalancing(target_weights=target_weights, target_cash_pct=0.20, band_pct=0.25)
+            tr = create_portfolio_strategy("S07", selected_universe)
             result = tr.simulate(
                 prices_df=prices_df,
                 initial_capital=initial_capital,
@@ -250,7 +246,7 @@ def execute_backtest(
             )
         elif selected_code == "S08":
             prices_df = loader.load_multi_data(selected_universe, lookback_years=years)
-            qf = QualityValueFactorStrategy(universe=selected_universe, top_n=5, target_weight_per_stock=0.15)
+            qf = create_portfolio_strategy("S08", selected_universe)
             weights_df = qf.compute_target_weights(prices_df)
             norm_prices = prices_df.divide(prices_df.iloc[0])
             benchmark_series = norm_prices.mean(axis=1) * prices_df.iloc[0].mean()
@@ -270,16 +266,26 @@ def execute_backtest(
         return result, risk_profile, png_bytes, True
 
 
+VIEW_BACKTEST = "📊 历史回测分析 (Historical Backtest)"
+VIEW_FORWARD = "🔮 下一交易日信号预览 (Next-Day Signal)"
+
 # Initialize session state
 if "last_run" not in st.session_state:
     st.session_state["last_run"] = None
 if "cache_bust" not in st.session_state:
     st.session_state["cache_bust"] = 0
+if "main_view_mode" not in st.session_state:
+    st.session_state["main_view_mode"] = VIEW_BACKTEST
+
+
+def _switch_to_forward_preview():
+    st.session_state["main_view_mode"] = VIEW_FORWARD
 
 
 def _reset_to_home():
     """Resets backtest state and all control widgets back to the initial Home view (like a browser refresh)."""
     st.session_state["last_run"] = None
+    st.session_state["main_view_mode"] = VIEW_BACKTEST
     for widget_key in (
         "strategy_select",
         "ticker_mode",
@@ -292,6 +298,9 @@ def _reset_to_home():
         "hero_portfolio_ticker",
     ):
         st.session_state.pop(widget_key, None)
+    for k in list(st.session_state.keys()):
+        if str(k).startswith("replay_result_"):
+            st.session_state.pop(k, None)
 
 
 # ==========================================
@@ -378,6 +387,12 @@ with st.sidebar:
 
     st.markdown("---")
     run_btn = st.button("🚀 运行量化回测", type="primary", width="stretch", key="run_btn")
+    st.button(
+        "🔮 下一交易日信号预览",
+        on_click=_switch_to_forward_preview,
+        width="stretch",
+        key="sidebar_forward_btn",
+    )
     home_sidebar_slot = st.empty()
 
 
@@ -386,8 +401,8 @@ with st.sidebar:
 # ==========================================
 col_title, col_home_top = st.columns([4.2, 1], vertical_alignment="center")
 with col_title:
-    st.title("📈 美股量化交易策略回测与风控系统")
-    st.caption("基于严格真实行情 · 无前视偏差 · 充分预热切片 · 投资风险评级模型 (R1~R4) · v2.2")
+    st.title("📈 美股量化交易策略回测与信号预览系统")
+    st.caption("严格真实行情 · 无前视偏差 · 历史回测 + 下一交易日信号预览 (Next-Day Signal Preview) · 投资风险评级 (R1~R4) · v2.3")
 with col_home_top:
     home_top_slot = st.empty()
 
@@ -448,6 +463,7 @@ with st.container(border=True):
 
 # Execute Backtest when button clicked
 if run_btn:
+    st.session_state["main_view_mode"] = VIEW_BACKTEST
     with st.spinner("⏳ 正在载入真实行情数据并执行量化仿真，请稍候..."):
         try:
             result, risk_profile, png_bytes, is_portfolio = execute_backtest(
@@ -462,6 +478,12 @@ if run_btn:
             diagnosis = diagnose_backtest_trades(result, selected_code, is_portfolio=is_portfolio)
             st.session_state["last_run"] = {
                 "selected_code": selected_code,
+                "target_ticker": _normalize_ticker(target_ticker),
+                "selected_universe": list(selected_universe),
+                "years": years,
+                "eval_days": eval_days,
+                "initial_capital": initial_capital,
+                "slippage_bps": slippage_bps,
                 "result": result,
                 "risk_profile": risk_profile,
                 "png_bytes": png_bytes,
@@ -474,7 +496,15 @@ if run_btn:
 
 last_run = st.session_state["last_run"]
 
-if last_run is not None:
+# Top-level module switcher: Historical Backtest vs Next-Day Signal Preview
+active_view = st.segmented_control(
+    "工作区模式切换",
+    options=[VIEW_BACKTEST, VIEW_FORWARD],
+    key="main_view_mode",
+    label_visibility="collapsed",
+) or VIEW_BACKTEST
+
+if last_run is not None or active_view == VIEW_FORWARD:
     home_sidebar_slot.button(
         "🏠 返回首页",
         on_click=_reset_to_home,
@@ -488,16 +518,100 @@ if last_run is not None:
         key="home_top_btn",
     )
 
-if not last_run:
+if active_view == VIEW_FORWARD:
+    with st.spinner("⏳ 正在调用策略引擎计算下一交易日条件触发阈值与风控校验..."):
+        try:
+            clean_target = _normalize_ticker(target_ticker)
+            matched_bt = (
+                last_run
+                if (
+                    last_run is not None
+                    and last_run.get("selected_code") == selected_code
+                    and (
+                        (not last_run["is_portfolio"] and last_run.get("target_ticker") == clean_target)
+                        or (last_run["is_portfolio"] and last_run.get("selected_universe") == list(selected_universe))
+                    )
+                )
+                else None
+            )
+
+            if strat_meta["type"] == "single":
+                full_single_df = load_full_single_ohlcv(
+                    clean_target,
+                    years=years,
+                    cache_bust=st.session_state["cache_bust"],
+                )
+                fwd_report = analyze_next_day_signal(
+                    strategy_code=selected_code,
+                    df=full_single_df,
+                    ticker=clean_target,
+                    initial_capital=initial_capital,
+                    slippage_bps=slippage_bps,
+                    eval_days=eval_days,
+                    backtest_result=matched_bt["result"] if matched_bt else None,
+                    risk_profile=matched_bt["risk_profile"] if matched_bt else None,
+                )
+                render_next_day_signal_dashboard(
+                    report=fwd_report,
+                    single_df=full_single_df,
+                    prices_df=None,
+                    ticker=clean_target,
+                    universe=None,
+                )
+            else:
+                pool_tickers = tuple(selected_universe)
+                full_prices_df = load_full_multi_prices(
+                    pool_tickers,
+                    years=years,
+                    cache_bust=st.session_state["cache_bust"],
+                )
+                focus_sym = hero_ticker if hero_ticker in full_prices_df.columns else str(full_prices_df.columns[0])
+                focus_single_df = load_full_single_ohlcv(
+                    focus_sym,
+                    years=years,
+                    cache_bust=st.session_state["cache_bust"],
+                )
+                fwd_report = analyze_next_day_signal(
+                    strategy_code=selected_code,
+                    prices_df=full_prices_df,
+                    ticker=focus_sym,
+                    universe=list(selected_universe),
+                    initial_capital=initial_capital,
+                    slippage_bps=slippage_bps,
+                    eval_days=eval_days,
+                    backtest_result=matched_bt["result"] if matched_bt else None,
+                    risk_profile=matched_bt["risk_profile"] if matched_bt else None,
+                )
+                render_next_day_signal_dashboard(
+                    report=fwd_report,
+                    single_df=focus_single_df,
+                    prices_df=full_prices_df,
+                    ticker=focus_sym,
+                    universe=list(selected_universe),
+                )
+        except Exception as e:
+            st.error(f"❌ 下一交易日信号预览计算失败: {str(e)}")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_fh1, col_fh2, col_fh3 = st.columns([1.5, 1.2, 1.5])
+    with col_fh2:
+        st.button(
+            "🏠 返回首页（回到初始界面）",
+            on_click=_reset_to_home,
+            width="stretch",
+            key="home_forward_bottom_btn",
+        )
+
+elif not last_run:
     st.markdown("""
-    ### 👋 欢迎使用量化回测控制台！
+    ### 👋 欢迎使用量化回测与信号预览控制台！
     上方为您已选定标的与时间周期的**实时日 K 线与成交量视图**。
 
     #### 💡 快速上手步骤：
     1. 在**左侧控制台**挑选您想要检验的交易策略（按 S01~S09 排序）；
     2. 选择目标股票（内置**纳斯达克市值前 50 强标的**，含 SpaceX `SPCX`、特斯拉 `TSLA`、英伟达 `NVDA` 等）；
     3. 选择回测时间档位（支持 **3天、1周、1个月、半年、1年、3年、5年**）；
-    4. 点击左下角 **【🚀 运行量化回测】**，即可查看**风险评级卡**、**交易触发原因诊断**、**K 线信号图解**与**收益报表**！
+    4. 点击左下角 **【🚀 运行量化回测】** 查看历史绩效与诊断，或直接点击 **【🔮 下一交易日信号预览】** 查看明日条件触发价、价格敏感性矩阵与历史无前视重放验证！
     """)
 
     with st.expander("🔍 展开查看纳斯达克市值前 50 强标的速查表 (Top 50 Companies)"):
@@ -505,7 +619,7 @@ if not last_run:
             {"代码": sym, "公司名称": data["name"], "所属板块": data["sector"]}
             for sym, data in NASDAQ_TOP_50_MAP.items()
         ])
-        st.dataframe(top50_df, width="stretch", height=350)
+        st.dataframe(top50_df, width="stretch", height=350, alt="Nasdaq top 50 companies table")
 else:
     result = last_run["result"]
     risk_profile = last_run["risk_profile"]
@@ -513,6 +627,48 @@ else:
     run_code = last_run["selected_code"]
     diagnosis = last_run["diagnosis"]
     png_bytes = last_run["png_bytes"]
+
+    # --- SECTION 0: COMPACT NEXT-DAY SIGNAL PREVIEW BANNER ---
+    try:
+        if not is_portfolio:
+            run_ticker = last_run.get("target_ticker", getattr(result, "ticker", "NVDA"))
+            run_df = load_full_single_ohlcv(
+                run_ticker,
+                years=last_run.get("years", years),
+                cache_bust=st.session_state["cache_bust"],
+            )
+            banner_report = analyze_next_day_signal(
+                strategy_code=run_code,
+                df=run_df,
+                ticker=run_ticker,
+                initial_capital=last_run.get("initial_capital", initial_capital),
+                slippage_bps=last_run.get("slippage_bps", slippage_bps),
+                eval_days=last_run.get("eval_days", eval_days),
+                backtest_result=result,
+                risk_profile=risk_profile,
+            )
+        else:
+            run_pool = tuple(last_run.get("selected_universe", selected_universe))
+            run_prices_df = load_full_multi_prices(
+                run_pool,
+                years=last_run.get("years", years),
+                cache_bust=st.session_state["cache_bust"],
+            )
+            banner_report = analyze_next_day_signal(
+                strategy_code=run_code,
+                prices_df=run_prices_df,
+                ticker=str(run_prices_df.columns[0]),
+                universe=list(run_pool),
+                initial_capital=last_run.get("initial_capital", initial_capital),
+                slippage_bps=last_run.get("slippage_bps", slippage_bps),
+                eval_days=last_run.get("eval_days", eval_days),
+                backtest_result=result,
+                risk_profile=risk_profile,
+            )
+        render_compact_signal_banner(banner_report, on_open_full=_switch_to_forward_preview)
+        st.markdown("<br>", unsafe_allow_html=True)
+    except Exception:
+        pass
 
     # --- SECTION 1: INVESTMENT RISK ASSESSMENT CARD ---
     st.markdown("### 🛡️ 投资风险评级与初学者风控指南 (Risk Assessment Card)")
